@@ -1733,22 +1733,25 @@ HRESULT WINAPI HookEndScene(IDirect3DDevice9* dev) {
              (int)g_visible.load());
     }
 
-    // Only check hotkey when our window actually has the foreground focus!
-    // This prevents background dual-box clients from hijacking the key press.
+    // Track toggle key. We gate the EFFECT on focus (background client
+    // must not toggle the overlay) but we track the PHYSICAL key state
+    // unconditionally. Without this, wasKeyDown is reset to false while
+    // the window is in the background; if the user then presses ScrLk
+    // while Client 2 is focused and holds it, the moment Client 1
+    // regains focus wasKeyDown=false+isKeyDown=true fires a spurious
+    // toggle — turning the overlay OFF when the user expected it ON.
     static bool wasKeyDown = false;
-    bool hasFocus = (GetForegroundWindow() == g_targetHwnd);
-    bool isKeyDown = hasFocus && ((GetAsyncKeyState(g_toggleVk) & 0x8000) != 0);
+    bool hasFocus      = (GetForegroundWindow() == g_targetHwnd);
+    bool isPhysDown    = (GetAsyncKeyState(g_toggleVk) & 0x8000) != 0;
+    bool isKeyDown     = hasFocus && isPhysDown;
     if (isKeyDown && !wasKeyDown) {
         bool prev = g_visible.load();
         g_visible.store(!prev);
-        Logf("[l2voice] overlay toggled via GetAsyncKeyState %s\n", prev ? "OFF" : "ON");
+        Logf("[l2voice] overlay toggled %s (focus=%d)\n", prev ? "OFF" : "ON", hasFocus ? 1 : 0);
     }
-
-    if (!hasFocus) {
-        wasKeyDown = false;
-    } else {
-        wasKeyDown = isKeyDown;
-    }
+    // Always update wasKeyDown from PHYSICAL state so that a key held
+    // across a focus-change doesn't re-trigger on the first focused frame.
+    wasKeyDown = isPhysDown;
 
     if (!g_imguiBackendInit.load()) {
         ImGui::SetCurrentContext(g_imguiCtx);
@@ -1853,13 +1856,21 @@ HRESULT WINAPI HookEndScene(IDirect3DDevice9* dev) {
 }
 
 HRESULT WINAPI HookReset(IDirect3DDevice9* dev, D3DPRESENT_PARAMETERS* pp) {
+    // Device Reset fires when the D3D9 device was lost (e.g. alt-tab in
+    // exclusive-fullscreen, resolution change, second client stealing the
+    // GPU). Log it so we know if device-loss is causing the overlay to
+    // disappear in dual-box scenarios.
+    Logf("[l2voice] HookReset called — device lost/recovering. backend=%d\n",
+         g_imguiBackendInit.load() ? 1 : 0);
     if (g_imguiBackendInit.load()) {
         ImGui::SetCurrentContext(g_imguiCtx);
         ImGui_ImplDX9_InvalidateDeviceObjects();
     }
     HRESULT hr = g_origReset(dev, pp);
+    Logf("[l2voice] HookReset: g_origReset returned 0x%08X\n", (unsigned)hr);
     if (SUCCEEDED(hr) && g_imguiBackendInit.load()) {
         ImGui_ImplDX9_CreateDeviceObjects();
+        Logf("[l2voice] HookReset: ImGui device objects recreated\n");
     }
     return hr;
 }
