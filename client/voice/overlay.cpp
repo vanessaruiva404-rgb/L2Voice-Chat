@@ -1713,18 +1713,23 @@ LRESULT CALLBACK HookedWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 // =============================================================
 
 HRESULT WINAPI HookEndScene(IDirect3DDevice9* dev) {
-    // Heartbeat: log every 300 frames (~5s at 60fps) so we can detect
-    // if EndScene stops being called when a second L2 client opens.
+    // Heartbeat: log every 150 frames (~2.5s at 60fps) with wall-clock time
+    // so we can correlate exactly when the 2nd L2 client opens vs this render loop.
     static DWORD s_frameCount = 0;
+    static DWORD s_startTick  = 0;
+    if (s_frameCount == 0) s_startTick = GetTickCount();
     ++s_frameCount;
     if (s_frameCount == 1) {
-        Logf("[l2voice] EndScene: FIRST frame. hwnd=%p visible=%d\n",
-             g_targetHwnd, (int)g_visible.load());
+        Logf("[l2voice] EndScene: FIRST frame. hwnd=%p visible=%d tick=%lu\n",
+             g_targetHwnd, (int)g_visible.load(), GetTickCount());
     }
-    if ((s_frameCount % 300) == 0) {
-        Logf("[l2voice] EndScene: heartbeat frame=%lu hwnd=%p focus=%d visible=%d\n",
-             s_frameCount, g_targetHwnd,
-             (GetForegroundWindow() == g_targetHwnd) ? 1 : 0,
+    if ((s_frameCount % 150) == 0) {
+        DWORD elapsed = GetTickCount() - s_startTick;
+        HWND  fg      = GetForegroundWindow();
+        Logf("[l2voice] EndScene: hb frame=%lu t=%lus hwnd=%p fg=%p focus=%d visible=%d\n",
+             s_frameCount, (unsigned long)(elapsed / 1000),
+             g_targetHwnd, fg,
+             (fg == g_targetHwnd) ? 1 : 0,
              (int)g_visible.load());
     }
 
