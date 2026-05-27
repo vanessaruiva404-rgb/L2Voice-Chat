@@ -275,11 +275,25 @@ void InstallDirectInputHook() {
 // =============================================================
 
 void Logf(const char* fmt, ...) {
-    char buf[256];
+    char buf[512];
     va_list ap; va_start(ap, fmt);
     _vsnprintf_s(buf, sizeof(buf), _TRUNCATE, fmt, ap);
     va_end(ap);
     OutputDebugStringA(buf);
+
+    wchar_t logPath[MAX_PATH] = {};
+    if (GetModuleFileNameW(GetModuleHandleW(L"l2voice.dll"), logPath, MAX_PATH)) {
+        wchar_t* lastSlash = wcsrchr(logPath, L'\\');
+        if (lastSlash) {
+            *lastSlash = L'\0';
+        }
+        wcscat_s(logPath, MAX_PATH, L"\\l2voice.log");
+        FILE* f = nullptr;
+        if (_wfopen_s(&f, logPath, L"a") == 0 && f) {
+            fprintf(f, "[PID:%lu] %s", GetCurrentProcessId(), buf);
+            fclose(f);
+        }
+    }
 }
 
 // Decodes PNG bytes (in memory) via stb_image, OPTIONALLY pre-tints
