@@ -1709,6 +1709,78 @@ LRESULT CALLBACK HookedWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 }
 
 // =============================================================
+// D3D9 hooks — helpers
+// =============================================================
+
+// Safely Release() a COM texture, then null the pointer.
+static inline void TexRelease(IDirect3DTexture9*& tex) {
+    if (tex) { tex->Release(); tex = nullptr; }
+}
+
+// (Re)load all custom embedded textures for a given D3D9 device.
+// Safe to call multiple times — releases the previous textures first.
+// Must be called whenever the D3D9 device pointer changes (device-change
+// detection block) and on first backend initialisation.
+void ReloadEmbeddedTextures(IDirect3DDevice9* dev) {
+    // Release old COM objects (they belong to the previous/dead device).
+    TexRelease(g_micTexture);
+    TexRelease(g_micSpeakingTex);
+    TexRelease(g_micMutedTex);
+    TexRelease(g_micBlockedTex);
+    TexRelease(g_l2BtnBig);
+    TexRelease(g_l2BtnBigOver);
+    TexRelease(g_l2BtnBigDown);
+    TexRelease(g_l2BtnSmall);
+    TexRelease(g_l2BtnSmallOver);
+    TexRelease(g_l2BtnSmallDown);
+    TexRelease(g_l2FrameMini);
+    TexRelease(g_l2FrameMiniOver);
+    TexRelease(g_l2FrameMiniDown);
+    TexRelease(g_l2FrameClose);
+    TexRelease(g_l2FrameCloseOver);
+    TexRelease(g_l2FrameCloseDown);
+    TexRelease(g_l2TabSelected);
+    TexRelease(g_l2TabUnselected);
+    TexRelease(g_l2TabUnselectedOver);
+    TexRelease(g_l2WndBg);
+
+    // Reload from embedded DLL resources.
+    g_micTexture = LoadEmbeddedMicTexture(dev, g_micW, g_micH, /*tintRgb*/ 0xFFFFFF);
+    if (g_micTexture) {
+        Logf("[l2voice] ReloadEmbeddedTextures: mic icon %dx%d\n", g_micW, g_micH);
+    } else {
+        Logf("[l2voice] ReloadEmbeddedTextures: mic icon not found — text fallback\n");
+    }
+
+    int wTmp, hTmp;
+    g_micSpeakingTex = LoadEmbeddedPng(dev, IDR_MIC_SPEAKING_PNG, wTmp, hTmp, 0);
+    g_micMutedTex    = LoadEmbeddedPng(dev, IDR_MIC_MUTED_PNG,    wTmp, hTmp, 0);
+    g_micBlockedTex  = LoadEmbeddedPng(dev, IDR_MIC_BLOCKED_PNG,  wTmp, hTmp, 0);
+    Logf("[l2voice] ReloadEmbeddedTextures: speak=%p muted=%p blocked=%p\n",
+         (void*)g_micSpeakingTex, (void*)g_micMutedTex, (void*)g_micBlockedTex);
+
+    g_l2BtnBig           = LoadEmbeddedPng(dev, IDR_L2UI_BTN_BIG,              wTmp, hTmp, 0);
+    g_l2BtnBigOver       = LoadEmbeddedPng(dev, IDR_L2UI_BTN_BIG_OVER,         wTmp, hTmp, 0);
+    g_l2BtnBigDown       = LoadEmbeddedPng(dev, IDR_L2UI_BTN_BIG_DOWN,         wTmp, hTmp, 0);
+    g_l2BtnSmall         = LoadEmbeddedPng(dev, IDR_L2UI_BTN_SMALL,            wTmp, hTmp, 0);
+    g_l2BtnSmallOver     = LoadEmbeddedPng(dev, IDR_L2UI_BTN_SMALL_OVER,       wTmp, hTmp, 0);
+    g_l2BtnSmallDown     = LoadEmbeddedPng(dev, IDR_L2UI_BTN_SMALL_DOWN,       wTmp, hTmp, 0);
+    g_l2FrameMini        = LoadEmbeddedPng(dev, IDR_L2UI_FRAME_MINI,           wTmp, hTmp, 0);
+    g_l2FrameMiniOver    = LoadEmbeddedPng(dev, IDR_L2UI_FRAME_MINI_OVER,      wTmp, hTmp, 0);
+    g_l2FrameMiniDown    = LoadEmbeddedPng(dev, IDR_L2UI_FRAME_MINI_DOWN,      wTmp, hTmp, 0);
+    g_l2FrameClose       = LoadEmbeddedPng(dev, IDR_L2UI_FRAME_CLOSE,          wTmp, hTmp, 0);
+    g_l2FrameCloseOver   = LoadEmbeddedPng(dev, IDR_L2UI_FRAME_CLOSE_OVER,     wTmp, hTmp, 0);
+    g_l2FrameCloseDown   = LoadEmbeddedPng(dev, IDR_L2UI_FRAME_CLOSE_DOWN,     wTmp, hTmp, 0);
+    g_l2TabSelected      = LoadEmbeddedPng(dev, IDR_L2UI_TAB_SELECTED,         wTmp, hTmp, 0);
+    g_l2TabUnselected    = LoadEmbeddedPng(dev, IDR_L2UI_TAB_UNSELECTED,       wTmp, hTmp, 0);
+    g_l2TabUnselectedOver= LoadEmbeddedPng(dev, IDR_L2UI_TAB_UNSELECTED_OVER,  wTmp, hTmp, 0);
+    g_l2WndBg            = LoadEmbeddedPng(dev, IDR_L2UI_WND_BG,               wTmp, hTmp, 0);
+    Logf("[l2voice] ReloadEmbeddedTextures: L2UI big=%p small=%p mini=%p close=%p wnd=%p\n",
+         (void*)g_l2BtnBig, (void*)g_l2BtnSmall, (void*)g_l2FrameMini,
+         (void*)g_l2FrameClose, (void*)g_l2WndBg);
+}
+
+// =============================================================
 // D3D9 hooks
 // =============================================================
 
@@ -1751,6 +1823,10 @@ HRESULT WINAPI HookEndScene(IDirect3DDevice9* dev) {
                     }
                 }
                 g_imguiBackendInit.store(true);
+                // Reload all custom textures for the new device.
+                // Without this they still point to the old dead device
+                // and appear garbled or invisible.
+                ReloadEmbeddedTextures(dev);
                 Logf("[l2voice] EndScene: ImGui DX9 reinit complete\n");
             }
         }
@@ -1830,46 +1906,9 @@ HRESULT WINAPI HookEndScene(IDirect3DDevice9* dev) {
                               reinterpret_cast<LONG_PTR>(&HookedWndProc)));
 
         // Mic icon — embedded as RCDATA in the DLL (see
-        // voice/resources.rc.in). Pre-tinted to WHITE so the runtime
-        // tint controls the displayed color (gold base, brighter on
-        // hover). No file dependency at runtime.
-        g_micTexture = LoadEmbeddedMicTexture(dev, g_micW, g_micH,
-            /*tintRgb*/ 0xFFFFFF);
-        if (g_micTexture) {
-            Logf("[l2voice] icon loaded from resource: %dx%d\n",
-                g_micW, g_micH);
-        } else {
-            Logf("[l2voice] embedded icon resource not found — text fallback\n");
-        }
-        // State-colored mic icons for the minimized speaker overlay.
-        // Preserve original PNG colors (tint=0).
-        int wTmp, hTmp;
-        g_micSpeakingTex = LoadEmbeddedPng(dev, IDR_MIC_SPEAKING_PNG, wTmp, hTmp, 0);
-        g_micMutedTex    = LoadEmbeddedPng(dev, IDR_MIC_MUTED_PNG,    wTmp, hTmp, 0);
-        g_micBlockedTex  = LoadEmbeddedPng(dev, IDR_MIC_BLOCKED_PNG,  wTmp, hTmp, 0);
-        Logf("[l2voice] state mics loaded: speak=%p muted=%p blocked=%p\n",
-             (void*)g_micSpeakingTex, (void*)g_micMutedTex, (void*)g_micBlockedTex);
-        // L2UI_CH3 buttons (native L2 textures — original PNG colors).
-        g_l2BtnBig         = LoadEmbeddedPng(dev, IDR_L2UI_BTN_BIG,           wTmp, hTmp, 0);
-        g_l2BtnBigOver     = LoadEmbeddedPng(dev, IDR_L2UI_BTN_BIG_OVER,      wTmp, hTmp, 0);
-        g_l2BtnBigDown     = LoadEmbeddedPng(dev, IDR_L2UI_BTN_BIG_DOWN,      wTmp, hTmp, 0);
-        g_l2BtnSmall       = LoadEmbeddedPng(dev, IDR_L2UI_BTN_SMALL,         wTmp, hTmp, 0);
-        g_l2BtnSmallOver   = LoadEmbeddedPng(dev, IDR_L2UI_BTN_SMALL_OVER,    wTmp, hTmp, 0);
-        g_l2BtnSmallDown   = LoadEmbeddedPng(dev, IDR_L2UI_BTN_SMALL_DOWN,    wTmp, hTmp, 0);
-        g_l2FrameMini      = LoadEmbeddedPng(dev, IDR_L2UI_FRAME_MINI,        wTmp, hTmp, 0);
-        g_l2FrameMiniOver  = LoadEmbeddedPng(dev, IDR_L2UI_FRAME_MINI_OVER,   wTmp, hTmp, 0);
-        g_l2FrameMiniDown  = LoadEmbeddedPng(dev, IDR_L2UI_FRAME_MINI_DOWN,   wTmp, hTmp, 0);
-        g_l2FrameClose     = LoadEmbeddedPng(dev, IDR_L2UI_FRAME_CLOSE,       wTmp, hTmp, 0);
-        g_l2FrameCloseOver = LoadEmbeddedPng(dev, IDR_L2UI_FRAME_CLOSE_OVER,  wTmp, hTmp, 0);
-        g_l2FrameCloseDown = LoadEmbeddedPng(dev, IDR_L2UI_FRAME_CLOSE_DOWN,  wTmp, hTmp, 0);
-        g_l2TabSelected         = LoadEmbeddedPng(dev, IDR_L2UI_TAB_SELECTED,         wTmp, hTmp, 0);
-        g_l2TabUnselected       = LoadEmbeddedPng(dev, IDR_L2UI_TAB_UNSELECTED,       wTmp, hTmp, 0);
-        g_l2TabUnselectedOver   = LoadEmbeddedPng(dev, IDR_L2UI_TAB_UNSELECTED_OVER,  wTmp, hTmp, 0);
-        g_l2WndBg               = LoadEmbeddedPng(dev, IDR_L2UI_WND_BG,               wTmp, hTmp, 0);
-        Logf("[l2voice] L2UI_CH3 textures loaded: big=%p small=%p mini=%p close=%p tabs=%p/%p/%p\n",
-             (void*)g_l2BtnBig, (void*)g_l2BtnSmall, (void*)g_l2FrameMini,
-             (void*)g_l2FrameClose,
-             (void*)g_l2TabSelected, (void*)g_l2TabUnselected, (void*)g_l2TabUnselectedOver);
+        // voice/resources.rc.in). Loaded via the shared helper so that
+        // device-change recovery reuses exactly the same code path.
+        ReloadEmbeddedTextures(dev);
 
         g_imguiBackendInit.store(true);
     }
