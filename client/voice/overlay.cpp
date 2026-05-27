@@ -1019,9 +1019,7 @@ void DrawComingSoon(const char* channelName) {
 // cursor management and flickering badly. (Pattern lifted from the
 // existing l2ui DLL where we already hit and fixed this same bug.)
 bool ShouldDrawFrame() {
-    if (!g_visible.load(std::memory_order_relaxed)) return false;
-    OverlayState st = SnapshotOverlayState();
-    return st.session_id != 0;
+    return g_visible.load(std::memory_order_relaxed);
 }
 
 // Small square icon (48x48) shown when the panel is minimized.
@@ -1687,6 +1685,16 @@ LRESULT CALLBACK HookedWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 // =============================================================
 
 HRESULT WINAPI HookEndScene(IDirect3DDevice9* dev) {
+    // Check toggle key state directly via GetAsyncKeyState to bypass WndProc hijacking
+    static bool wasKeyDown = false;
+    bool isKeyDown = (GetAsyncKeyState(g_toggleVk) & 0x8000) != 0;
+    if (isKeyDown && !wasKeyDown) {
+        bool prev = g_visible.load();
+        g_visible.store(!prev);
+        Logf("[l2voice] overlay toggled via GetAsyncKeyState %s\n", prev ? "OFF" : "ON");
+    }
+    wasKeyDown = isKeyDown;
+
     if (!g_imguiBackendInit.load()) {
         ImGui::SetCurrentContext(g_imguiCtx);
 
@@ -1821,6 +1829,12 @@ bool GetDeviceVTableEntries(void*& endSceneOut, void*& resetOut) {
     HRESULT hr = d3d->CreateDevice(
         D3DADAPTER_DEFAULT, D3DDEVTYPE_NULLREF, GetDesktopWindow(),
         D3DCREATE_SOFTWARE_VERTEXPROCESSING, &pp, &dev);
+    if (FAILED(hr) || !dev) {
+        // Fallback to D3DDEVTYPE_HAL if NULLREF is not supported by the system drivers
+        hr = d3d->CreateDevice(
+            D3DADAPTER_DEFAULT, D3DDEVTYPE_HAL, GetDesktopWindow(),
+            D3DCREATE_SOFTWARE_VERTEXPROCESSING, &pp, &dev);
+    }
     if (FAILED(hr) || !dev) { d3d->Release(); return false; }
     void** vt = *reinterpret_cast<void***>(dev);
     resetOut    = vt[16];
@@ -1885,6 +1899,24 @@ bool InstallOverlay() {
     IMGUI_CHECKVERSION();
     g_imguiCtx = ImGui::CreateContext();
     ImGui::SetCurrentContext(g_imguiCtx);
+
+    // Load toggle key from voice.ini
+    wchar_t iniPath[MAX_PATH] = {};
+    if (GetModuleFileNameW(GetModuleHandleW(L"l2voice.dll"), iniPath, MAX_PATH)) {
+        wchar_t* lastSlash = wcsrchr(iniPath, L'\\');
+        if (lastSlash) {
+            *lastSlash = L'\0';
+        }
+        wcscat_s(iniPath, MAX_PATH, L"\\voice.ini");
+        int tk = GetPrivateProfileIntW(L"voice", L"overlay_toggle_vk", 0, iniPath);
+        if (tk == 0) {
+            tk = GetPrivateProfileIntW(L"voice", L"toggle_key", VK_INSERT, iniPath);
+        }
+        g_toggleVk = tk;
+        Logf("[l2voice] overlay: toggle key set to VK=%d from voice.ini\n", g_toggleVk);
+    } else {
+        g_toggleVk = VK_INSERT;
+    }
 
     Logf("[l2voice] overlay: hooks armed, waiting for first EndScene\n");
     return true;
