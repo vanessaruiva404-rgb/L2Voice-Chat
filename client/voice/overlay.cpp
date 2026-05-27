@@ -281,15 +281,31 @@ void Logf(const char* fmt, ...) {
     va_end(ap);
     OutputDebugStringA(buf);
 
+    // Primary: try next to the DLL (e.g. system\l2voice_PID.log)
+    // Each process writes its OWN file so dual-box logs don't mix.
+    bool written = false;
     wchar_t logPath[MAX_PATH] = {};
     if (GetModuleFileNameW(GetModuleHandleW(L"l2voice.dll"), logPath, MAX_PATH)) {
         wchar_t* lastSlash = wcsrchr(logPath, L'\\');
         if (lastSlash) {
             *lastSlash = L'\0';
         }
-        wcscat_s(logPath, MAX_PATH, L"\\l2voice.log");
+        wchar_t pidSuffix[32];
+        _snwprintf_s(pidSuffix, _TRUNCATE, L"\\l2voice_%lu.log", GetCurrentProcessId());
+        wcscat_s(logPath, MAX_PATH, pidSuffix);
         FILE* f = nullptr;
         if (_wfopen_s(&f, logPath, L"a") == 0 && f) {
+            fprintf(f, "[PID:%lu] %s", GetCurrentProcessId(), buf);
+            fclose(f);
+            written = true;
+        }
+    }
+    // Fallback: C:\l2voice_PID.log (always writable)
+    if (!written) {
+        wchar_t fallback[64];
+        _snwprintf_s(fallback, _TRUNCATE, L"C:\\l2voice_%lu.log", GetCurrentProcessId());
+        FILE* f = nullptr;
+        if (_wfopen_s(&f, fallback, L"a") == 0 && f) {
             fprintf(f, "[PID:%lu] %s", GetCurrentProcessId(), buf);
             fclose(f);
         }
@@ -1697,6 +1713,21 @@ LRESULT CALLBACK HookedWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 // =============================================================
 
 HRESULT WINAPI HookEndScene(IDirect3DDevice9* dev) {
+    // Heartbeat: log every 300 frames (~5s at 60fps) so we can detect
+    // if EndScene stops being called when a second L2 client opens.
+    static DWORD s_frameCount = 0;
+    ++s_frameCount;
+    if (s_frameCount == 1) {
+        Logf("[l2voice] EndScene: FIRST frame. hwnd=%p visible=%d\n",
+             g_targetHwnd, (int)g_visible.load());
+    }
+    if ((s_frameCount % 300) == 0) {
+        Logf("[l2voice] EndScene: heartbeat frame=%lu hwnd=%p focus=%d visible=%d\n",
+             s_frameCount, g_targetHwnd,
+             (GetForegroundWindow() == g_targetHwnd) ? 1 : 0,
+             (int)g_visible.load());
+    }
+
     // Only check hotkey when our window actually has the foreground focus!
     // This prevents background dual-box clients from hijacking the key press.
     static bool wasKeyDown = false;
@@ -1707,7 +1738,7 @@ HRESULT WINAPI HookEndScene(IDirect3DDevice9* dev) {
         g_visible.store(!prev);
         Logf("[l2voice] overlay toggled via GetAsyncKeyState %s\n", prev ? "OFF" : "ON");
     }
-    
+
     if (!hasFocus) {
         wasKeyDown = false;
     } else {
