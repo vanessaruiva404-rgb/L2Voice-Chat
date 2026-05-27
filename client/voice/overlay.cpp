@@ -1713,6 +1713,50 @@ LRESULT CALLBACK HookedWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 // =============================================================
 
 HRESULT WINAPI HookEndScene(IDirect3DDevice9* dev) {
+    // ---------------------------------------------------------------
+    // Device-change detection.
+    //
+    // When a second L2 process is detected, AbstractEx.dll destroys
+    // the existing D3D9 device and creates a brand-new one.  The new
+    // device shares the same vtable code addresses as the old one
+    // (same d3d9.dll), so our MinHook still intercepts EndScene — but
+    // ImGui_ImplDX9 still holds a pointer to the *old*, now-dead
+    // device and every draw call silently fails (the overlay vanishes).
+    //
+    // We detect the pointer change here and fully reinitialise the
+    // ImGui DX9 backend with the new device so the overlay survives.
+    // ---------------------------------------------------------------
+    static IDirect3DDevice9* s_knownDev = nullptr;
+    if (dev != s_knownDev) {
+        if (s_knownDev != nullptr) {
+            // Device was replaced — reinit ImGui DX9 backend.
+            Logf("[l2voice] EndScene: device changed %p->%p, reinitialising ImGui DX9\n",
+                 s_knownDev, dev);
+            if (g_imguiCtx) {
+                ImGui::SetCurrentContext(g_imguiCtx);
+                if (g_imguiBackendInit.load()) {
+                    ImGui_ImplDX9_Shutdown();
+                }
+                ImGui_ImplDX9_Init(dev);
+                ImGui_ImplDX9_CreateDeviceObjects();
+                // Reinstall WndProc if AbstractEx reset it.
+                if (g_targetHwnd) {
+                    WNDPROC cur = reinterpret_cast<WNDPROC>(
+                        GetWindowLongPtrW(g_targetHwnd, GWLP_WNDPROC));
+                    if (cur != HookedWndProc) {
+                        g_origWndProc = cur;
+                        SetWindowLongPtrW(g_targetHwnd, GWLP_WNDPROC,
+                            reinterpret_cast<LONG_PTR>(&HookedWndProc));
+                        Logf("[l2voice] EndScene: WndProc hook reinstalled after device change\n");
+                    }
+                }
+                g_imguiBackendInit.store(true);
+                Logf("[l2voice] EndScene: ImGui DX9 reinit complete\n");
+            }
+        }
+        s_knownDev = dev;
+    }
+
     // Heartbeat: log every 150 frames (~2.5s at 60fps) with wall-clock time
     // so we can correlate exactly when the 2nd L2 client opens vs this render loop.
     static DWORD s_frameCount = 0;
@@ -1726,11 +1770,11 @@ HRESULT WINAPI HookEndScene(IDirect3DDevice9* dev) {
     if ((s_frameCount % 150) == 0) {
         DWORD elapsed = GetTickCount() - s_startTick;
         HWND  fg      = GetForegroundWindow();
-        Logf("[l2voice] EndScene: hb frame=%lu t=%lus hwnd=%p fg=%p focus=%d visible=%d\n",
+        Logf("[l2voice] EndScene: hb frame=%lu t=%lus hwnd=%p fg=%p focus=%d visible=%d dev=%p\n",
              s_frameCount, (unsigned long)(elapsed / 1000),
              g_targetHwnd, fg,
              (fg == g_targetHwnd) ? 1 : 0,
-             (int)g_visible.load());
+             (int)g_visible.load(), dev);
     }
 
     // Track toggle key. We gate the EFFECT on focus (background client
@@ -1856,21 +1900,42 @@ HRESULT WINAPI HookEndScene(IDirect3DDevice9* dev) {
 }
 
 HRESULT WINAPI HookReset(IDirect3DDevice9* dev, D3DPRESENT_PARAMETERS* pp) {
-    // Device Reset fires when the D3D9 device was lost (e.g. alt-tab in
-    // exclusive-fullscreen, resolution change, second client stealing the
-    // GPU). Log it so we know if device-loss is causing the overlay to
-    // disappear in dual-box scenarios.
-    Logf("[l2voice] HookReset called — device lost/recovering. backend=%d\n",
+    // Device Reset fires when the D3D9 device was lost (alt-tab in exclusive-
+    // fullscreen, resolution change, second client stealing the display).
+    // We do a FULL ImGui DX9 Shutdown+Init instead of just Invalidate/Create
+    // to guarantee a clean slate — stale COM pointers from a partial reset
+    // can cause silent render failures that make the overlay disappear.
+    Logf("[l2voice] HookReset called — reinitialising ImGui DX9. backend=%d\n",
          g_imguiBackendInit.load() ? 1 : 0);
-    if (g_imguiBackendInit.load()) {
+
+    if (g_imguiCtx) {
         ImGui::SetCurrentContext(g_imguiCtx);
-        ImGui_ImplDX9_InvalidateDeviceObjects();
+        if (g_imguiBackendInit.load()) {
+            ImGui_ImplDX9_Shutdown();  // full release, not just Invalidate
+        }
     }
+
     HRESULT hr = g_origReset(dev, pp);
     Logf("[l2voice] HookReset: g_origReset returned 0x%08X\n", (unsigned)hr);
-    if (SUCCEEDED(hr) && g_imguiBackendInit.load()) {
+
+    if (SUCCEEDED(hr) && g_imguiCtx) {
+        ImGui::SetCurrentContext(g_imguiCtx);
+        ImGui_ImplDX9_Init(dev);          // reinit with same (recovered) device
         ImGui_ImplDX9_CreateDeviceObjects();
-        Logf("[l2voice] HookReset: ImGui device objects recreated\n");
+        g_imguiBackendInit.store(true);
+        Logf("[l2voice] HookReset: ImGui DX9 fully reinitialized\n");
+
+        // Reinstall WndProc if AbstractEx replaced it during the reset cycle.
+        if (g_targetHwnd) {
+            WNDPROC cur = reinterpret_cast<WNDPROC>(
+                GetWindowLongPtrW(g_targetHwnd, GWLP_WNDPROC));
+            if (cur != HookedWndProc) {
+                g_origWndProc = cur;
+                SetWindowLongPtrW(g_targetHwnd, GWLP_WNDPROC,
+                    reinterpret_cast<LONG_PTR>(&HookedWndProc));
+                Logf("[l2voice] HookReset: WndProc hook reinstalled\n");
+            }
+        }
     }
     return hr;
 }
