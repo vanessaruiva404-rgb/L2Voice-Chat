@@ -1697,15 +1697,22 @@ LRESULT CALLBACK HookedWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 // =============================================================
 
 HRESULT WINAPI HookEndScene(IDirect3DDevice9* dev) {
-    // Check toggle key state directly via GetAsyncKeyState to bypass WndProc hijacking
+    // Only check hotkey when our window actually has the foreground focus!
+    // This prevents background dual-box clients from hijacking the key press.
     static bool wasKeyDown = false;
-    bool isKeyDown = (GetAsyncKeyState(g_toggleVk) & 0x8000) != 0;
+    bool hasFocus = (GetForegroundWindow() == g_targetHwnd);
+    bool isKeyDown = hasFocus && ((GetAsyncKeyState(g_toggleVk) & 0x8000) != 0);
     if (isKeyDown && !wasKeyDown) {
         bool prev = g_visible.load();
         g_visible.store(!prev);
         Logf("[l2voice] overlay toggled via GetAsyncKeyState %s\n", prev ? "OFF" : "ON");
     }
-    wasKeyDown = isKeyDown;
+    
+    if (!hasFocus) {
+        wasKeyDown = false;
+    } else {
+        wasKeyDown = isKeyDown;
+    }
 
     if (!g_imguiBackendInit.load()) {
         ImGui::SetCurrentContext(g_imguiCtx);
