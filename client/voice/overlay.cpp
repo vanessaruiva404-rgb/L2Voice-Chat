@@ -1623,8 +1623,6 @@ void DrawPanel() {
 
 LRESULT CALLBACK HookedWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     if (msg == WM_KEYDOWN && (int)wp == g_toggleVk) {
-        bool prev = g_visible.exchange(!g_visible.load());
-        Logf("[l2voice] overlay toggled %s\n", prev ? "OFF" : "ON");
         return 0;
     }
     if (g_captureNextKey.load()) {
