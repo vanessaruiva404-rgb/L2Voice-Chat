@@ -16,6 +16,10 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+# Link C++ Runtime statically (/MT in Release, /MTd in Debug) so players don't
+# need the Microsoft Visual C++ Redistributable installed.
+set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+
 # L2 client is 32-bit. Refuse to configure as 64-bit so the user can't
 # accidentally build a DLL the client can't load.
 if(CMAKE_SIZEOF_VOID_P EQUAL 8)
