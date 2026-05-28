@@ -258,6 +258,7 @@ std::vector<uint16_t> EnumerateOwnTcpPorts(uint16_t exclude_remote_port) {
         uint16_t localPort  = ntohs((u_short)r.dwLocalPort);
         uint16_t remotePort = ntohs((u_short)r.dwRemotePort);
         if (remotePort == exclude_remote_port) continue;
+        if (remotePort == 9014) continue; // Exclude Lineage II Login Server port to avoid false in-world detection
         // Only ESTABLISHED connections — listening sockets don't have
         // a meaningful "remote" the GS knows about.
         if (r.dwState != MIB_TCP_STATE_ESTAB) continue;
