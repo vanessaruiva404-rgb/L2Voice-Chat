@@ -309,4 +309,14 @@ set_target_properties(l2voice PROPERTIES
 
 if(MSVC)
     target_compile_options(l2voice PRIVATE /W3 /MP /EHsc)
+
+    # Force MSVC_RUNTIME_LIBRARY target property on ALL targets in this build to link runtimes statically (/MT).
+    # This overrides any internal configuration or cache settings in fetched subprojects (like opus or ixwebsocket).
+    foreach(t l2voice opus rnnoise speexdsp ixwebsocket minhook imgui)
+        if(TARGET ${t})
+            set_target_properties(${t} PROPERTIES
+                MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>"
+            )
+        endif()
+    endforeach()
 endif()
