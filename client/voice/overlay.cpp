@@ -89,6 +89,8 @@ namespace voice {
 
 namespace {
 
+void ReloadEmbeddedTextures(IDirect3DDevice9* dev);
+
 using EndScene_t = HRESULT(WINAPI*)(IDirect3DDevice9*);
 using Reset_t    = HRESULT(WINAPI*)(IDirect3DDevice9*, D3DPRESENT_PARAMETERS*);
 
