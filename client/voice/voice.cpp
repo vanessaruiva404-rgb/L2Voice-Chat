@@ -61,20 +61,20 @@ struct Mod {
 
     AudioCapture capture;
     AudioPlayback playback;
-    OpusEncoder   encoder;
+    VoiceOpusEncoder encoder;
     VoiceNetwork  net;
     std::thread   keepalive_thread;
 
     std::mutex dec_mu;
-    std::unordered_map<uint32_t, std::unique_ptr<OpusDecoder>> decoders;
+    std::unordered_map<uint32_t, std::unique_ptr<VoiceOpusDecoder>> decoders;
 
-    OpusDecoder* DecoderFor(uint32_t src) {
+    VoiceOpusDecoder* DecoderFor(uint32_t src) {
         std::lock_guard<std::mutex> lk(dec_mu);
         auto it = decoders.find(src);
         if (it != decoders.end()) return it->second.get();
-        auto d = std::make_unique<OpusDecoder>();
+        auto d = std::make_unique<VoiceOpusDecoder>();
         if (!d->Init()) return nullptr;
-        OpusDecoder* p = d.get();
+        VoiceOpusDecoder* p = d.get();
         decoders.emplace(src, std::move(d));
         return p;
     }
@@ -196,7 +196,7 @@ void OnIncomingPacket(uint8_t channel, uint32_t src, uint16_t /*seq*/,
         return;
     }
 
-    OpusDecoder* dec = g_mod.DecoderFor(src);
+    VoiceOpusDecoder* dec = g_mod.DecoderFor(src);
     if (!dec) return;
 
     int16_t pcm[kFrameSamples];
