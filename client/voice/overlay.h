@@ -44,6 +44,7 @@ struct OverlayState {
     // a channel disabled and still transmit on PTT, per Prompt §Regra 1).
     bool     ch_enabled[4];
     float    ch_volume[4];      // 0..2
+    char     char_name[64];
 };
 
 OverlayState SnapshotOverlayState();
