@@ -20,6 +20,7 @@
 
 #include <ixwebsocket/IXWebSocket.h>
 #include <ixwebsocket/IXNetSystem.h>
+#include "overlay.h"
 
 #include <atomic>
 #include <cstring>
@@ -414,6 +415,7 @@ void VoiceNetwork::ResumeWs() {
 void VoiceNetwork::Stop() {
     if (!impl_) return;
     impl_->stopping.store(true);
+    impl_->ws.setOnMessageCallback(nullptr);
     impl_->ws.stop();
     ix::uninitNetSystem();
     WSACleanup();
@@ -453,6 +455,8 @@ void VoiceNetwork::SendProximityFrame(uint16_t seq,
     }
     if (opus_len <= 0 || opus_len > 1024) return;
 
+    Logf("[l2voice] SendProximityFrame: sid=%u seq=%u len=%d\n", sid, seq, opus_len);
+
     uint8_t pkt[1100];
     pkt[0] = 1;                       // version
     pkt[1] = 0;                       // channel = proximity
@@ -461,7 +465,10 @@ void VoiceNetwork::SendProximityFrame(uint16_t seq,
     std::memcpy(pkt + 4, &sid, 4);
     std::memcpy(pkt + 8, opus, opus_len);
     int total = 8 + opus_len;
+
+    Logf("[l2voice] SendProximityFrame: before ws.send total=%d\n", total);
     impl_->ws.send(std::string(reinterpret_cast<const char*>(pkt), total), true);
+    Logf("[l2voice] SendProximityFrame: after ws.send\n");
 }
 
 void VoiceNetwork::SendGroupFrame(uint8_t channel, uint16_t seq,
@@ -470,6 +477,9 @@ void VoiceNetwork::SendGroupFrame(uint8_t channel, uint16_t seq,
     if (sid == 0) return;
     if (opus_len <= 0 || opus_len > 1024) return;
     if (channel < 1 || channel > 3) return;
+
+    Logf("[l2voice] SendGroupFrame: sid=%u channel=%u seq=%u len=%d\n", sid, channel, seq, opus_len);
+
     uint8_t pkt[1100];
     pkt[0] = 1;                       // version
     pkt[1] = channel;                 // 1=party, 2=clan, 3=ally
@@ -478,7 +488,10 @@ void VoiceNetwork::SendGroupFrame(uint8_t channel, uint16_t seq,
     std::memcpy(pkt + 4, &sid, 4);
     std::memcpy(pkt + 8, opus, opus_len);
     int total = 8 + opus_len;
+
+    Logf("[l2voice] SendGroupFrame: before ws.send total=%d\n", total);
     impl_->ws.send(std::string(reinterpret_cast<const char*>(pkt), total), true);
+    Logf("[l2voice] SendGroupFrame: after ws.send\n");
 }
 
 void VoiceNetwork::SendPingTick() {
@@ -541,6 +554,7 @@ void VoiceNetwork::Impl::HandleNotification(const std::string& s) {
         // we have the name). For the immediate toast, fall back to
         // "pid=N" if unresolved.
         char muterName[64] = "?";
+        bool needQuery = false;
         {
             std::lock_guard<std::mutex> lk(names_mu);
             auto it = player_name_cache.find((uint32_t)from);
@@ -549,12 +563,17 @@ void VoiceNetwork::Impl::HandleNotification(const std::string& s) {
             } else {
                 _snprintf_s(muterName, _TRUNCATE, "pid=%llu", (unsigned long long)from);
             }
+
+            // Kick off a name query so the SECOND notification can use the
+            // resolved name (this one may show pid=N if first-sight).
+            if (player_name_cache.find((uint32_t)from) == player_name_cache.end()
+                && player_name_inflight.find((uint32_t)from) == player_name_inflight.end()) {
+                player_name_inflight[(uint32_t)from] = true;
+                needQuery = true;
+            }
         }
-        // Kick off a name query so the SECOND notification can use the
-        // resolved name (this one may show pid=N if first-sight).
-        if (player_name_cache.find((uint32_t)from) == player_name_cache.end()
-            && player_name_inflight.find((uint32_t)from) == player_name_inflight.end()) {
-            player_name_inflight[(uint32_t)from] = true;
+
+        if (needQuery) {
             std::string q = "{\"type\":\"player_name_query\",\"player_id\":";
             q += std::to_string(from);
             q += "}";
