@@ -9,6 +9,7 @@ package control
 
 import (
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -21,6 +22,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/luannbr/l2voice/voice-service/internal/audio"
 	"github.com/luannbr/l2voice/voice-service/internal/topology"
 	"github.com/luannbr/l2voice/voice-service/internal/world"
 )
@@ -70,10 +72,10 @@ var upgrader = websocket.Upgrader{
 // Serve starts the WebSocket control plane on listenAddr (e.g. ":17667").
 // Returns when ctx is cancelled.
 func Serve(ctx context.Context, listenAddr string, state *topology.State,
-	worldState *world.WorldState, reg *ConnReg) error {
+	worldState *world.WorldState, reg *ConnReg, audioCfg audio.Config) error {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
-		handleWS(ctx, w, r, state, worldState, reg)
+		handleWS(ctx, w, r, state, worldState, reg, audioCfg)
 	})
 	// POC: outbound link from the L2J bridge. Lives on the same port
 	// so VPS firewall stays single-rule. See bridge_link.go.
@@ -106,7 +108,7 @@ func Serve(ctx context.Context, listenAddr string, state *topology.State,
 }
 
 func handleWS(ctx context.Context, w http.ResponseWriter, r *http.Request,
-	state *topology.State, worldState *world.WorldState, reg *ConnReg) {
+	state *topology.State, worldState *world.WorldState, reg *ConnReg, audioCfg audio.Config) {
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		log.Printf("control: upgrade error: %v", err)
@@ -179,6 +181,7 @@ func handleWS(ctx context.Context, w http.ResponseWriter, r *http.Request,
 		r.RemoteAddr, playerID, msg.Ports)
 
 	sess := state.AllocSession(playerID)
+	sess.ClientIP = clientIP
 	defer state.Drop(sess.ID)
 
 	// Register the player in the world (if not yet seen via Redis
@@ -224,10 +227,38 @@ func handleWS(ctx context.Context, w http.ResponseWriter, r *http.Request,
 			return
 		default:
 		}
-		_, raw, err := conn.ReadMessage()
+		msgType, raw, err := conn.ReadMessage()
 		if err != nil {
 			log.Printf("control: session %d closed (%v)", sess.ID, err)
 			return
+		}
+		if msgType == websocket.BinaryMessage {
+			if len(raw) < 8 {
+				continue
+			}
+			version := raw[0]
+			channel := raw[1]
+			seqLo := binary.LittleEndian.Uint16(raw[2:4])
+			sid := binary.LittleEndian.Uint32(raw[4:8])
+
+			if version != 1 {
+				continue
+			}
+			if sid != sess.ID {
+				continue
+			}
+
+			sendBinary := func(pid uint32, data []byte) {
+				reg.SendBinaryToPlayer(pid, data)
+			}
+
+			switch channel {
+			case 0: // chProximity
+				audio.RouteWebSocketProximity(seqLo, sid, raw[8:], sess, state, sendBinary, audioCfg)
+			case 1, 2, 3, 4: // chParty, chClan, chAlly, chCC
+				audio.RouteWebSocketGroup(channel, seqLo, sid, raw[8:], sess, state, worldState, sendBinary)
+			}
+			continue
 		}
 		if !dispatch(client, raw, dep) {
 			// Unknown / malformed type — drop silently. (Logging every
