@@ -1,4 +1,5 @@
 #include "apm.h"
+#include "overlay.h"
 
 #include <algorithm>
 #include <cmath>
@@ -109,6 +110,8 @@ float Apm::ProcessFrame(int16_t* pcm, uint32_t samples,
                         const int16_t* aec_ref) {
     if (samples == 0) return 0.0f;
 
+    Logf("[l2voice] Apm::ProcessFrame: start. samples=%u\n", samples);
+
     // ---- AEC (Speex DSP MDF) ----
     // Cancels the far-end playback signal out of the mic before any
     // other DSP touches it. Requires the ref frame to be roughly time-
@@ -116,14 +119,16 @@ float Apm::ProcessFrame(int16_t* pcm, uint32_t samples,
     // filter handles the residual skew.
     if (cfg_.aec_enabled && aec_state_ != nullptr && aec_ref != nullptr
             && samples == (uint32_t)kAecFrameSize) {
-        int16_t out_buf[kAecFrameSize];
+        Logf("[l2voice] Apm::ProcessFrame: before AEC\n");
         speex_echo_cancellation(static_cast<SpeexEchoState*>(aec_state_),
-                                pcm, aec_ref, out_buf);
-        std::memcpy(pcm, out_buf, samples * sizeof(int16_t));
+                                pcm, aec_ref, aec_out_buf_);
+        std::memcpy(pcm, aec_out_buf_, samples * sizeof(int16_t));
+        Logf("[l2voice] Apm::ProcessFrame: after AEC\n");
     }
 
     // ---- HPF (transposed direct-form II) ----
     if (cfg_.hpf_enabled) {
+        Logf("[l2voice] Apm::ProcessFrame: before HPF\n");
         for (uint32_t i = 0; i < samples; ++i) {
             float x = pcm[i] * (1.0f / 32768.0f);
             float y = hpf_b0_ * x + hpf_z1_;
@@ -134,6 +139,7 @@ float Apm::ProcessFrame(int16_t* pcm, uint32_t samples,
             else if (scaled < -32768.0f) scaled = -32768.0f;
             pcm[i] = (int16_t)scaled;
         }
+        Logf("[l2voice] Apm::ProcessFrame: after HPF\n");
     }
 
     // ---- Compute frame RMS ----
@@ -158,19 +164,20 @@ float Apm::ProcessFrame(int16_t* pcm, uint32_t samples,
     // ships sound suppression even if rnnoise_create failed (OOM,
     // model load error).
     if (cfg_.ns_enabled && rnn_state_ != nullptr && samples == 960) {
+        Logf("[l2voice] Apm::ProcessFrame: before RNNoise\n");
         DenoiseState* st = static_cast<DenoiseState*>(rnn_state_);
-        float chunk[480];
         for (int half = 0; half < 2; ++half) {
             int16_t* p = pcm + half * 480;
-            for (int i = 0; i < 480; ++i) chunk[i] = (float)p[i];
-            rnnoise_process_frame(st, chunk, chunk);
+            for (int i = 0; i < 480; ++i) rnn_chunk_[i] = (float)p[i];
+            rnnoise_process_frame(st, rnn_chunk_, rnn_chunk_);
             for (int i = 0; i < 480; ++i) {
-                float v = chunk[i];
+                float v = rnn_chunk_[i];
                 if      (v >  32767.0f) v =  32767.0f;
                 else if (v < -32768.0f) v = -32768.0f;
                 p[i] = (int16_t)v;
             }
         }
+        Logf("[l2voice] Apm::ProcessFrame: after RNNoise\n");
         // Recompute RMS post-denoise so AGC reacts to the cleaned signal.
         double acc2 = 0.0;
         for (uint32_t i = 0; i < samples; ++i) {
@@ -179,6 +186,7 @@ float Apm::ProcessFrame(int16_t* pcm, uint32_t samples,
         }
         frame_rms = (float)std::sqrt(acc2 / samples);
     } else if (cfg_.ns_enabled) {
+        Logf("[l2voice] Apm::ProcessFrame: before legacy NS\n");
         // Legacy RMS gate (only reached if rnnoise init failed).
         float attack  = 0.99f;
         float release = 0.20f;
@@ -199,10 +207,12 @@ float Apm::ProcessFrame(int16_t* pcm, uint32_t samples,
             }
             frame_rms *= ns_envelope_;
         }
+        Logf("[l2voice] Apm::ProcessFrame: after legacy NS\n");
     }
 
     // ---- AGC ----
     if (cfg_.agc_enabled && frame_rms > 1e-4f) {
+        Logf("[l2voice] Apm::ProcessFrame: before AGC\n");
         float target_lin = DbToLinear(cfg_.agc_target_dbfs);
         float desired    = target_lin / frame_rms;
         desired = Clamp(desired, cfg_.agc_min_gain, cfg_.agc_max_gain);
@@ -224,8 +234,10 @@ float Apm::ProcessFrame(int16_t* pcm, uint32_t samples,
             }
             frame_rms *= agc_gain_;
         }
+        Logf("[l2voice] Apm::ProcessFrame: after AGC\n");
     }
 
+    Logf("[l2voice] Apm::ProcessFrame: done\n");
     return frame_rms;
 }
 
