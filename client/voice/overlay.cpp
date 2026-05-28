@@ -34,6 +34,7 @@
 #include <cmath>
 #include <cstdarg>
 #include <cstdio>
+#include <mutex>
 
 #define STB_IMAGE_IMPLEMENTATION
 #define STBI_NO_HDR
@@ -45,6 +46,8 @@ extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(
     HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
 
 void Logf(const char* fmt, ...) {
+    static std::mutex s_log_mu;
+    std::lock_guard<std::mutex> lk(s_log_mu);
     char buf[512];
     va_list ap; va_start(ap, fmt);
     _vsnprintf_s(buf, sizeof(buf), _TRUNCATE, fmt, ap);
