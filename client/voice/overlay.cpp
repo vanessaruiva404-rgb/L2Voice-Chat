@@ -1796,6 +1796,11 @@ void ReloadEmbeddedTextures(IDirect3DDevice9* dev) {
 // =============================================================
 
 HRESULT WINAPI HookEndScene(IDirect3DDevice9* dev) {
+    // Skip rendering entirely if the D3D9 device is lost or resetting.
+    if (dev->TestCooperativeLevel() != D3D_OK) {
+        return g_origEndScene(dev);
+    }
+
     // ---------------------------------------------------------------
     // Device-change detection.
     //
@@ -1960,13 +1965,6 @@ HRESULT WINAPI HookReset(IDirect3DDevice9* dev, D3DPRESENT_PARAMETERS* pp) {
             ImGui_ImplWin32_Shutdown();
             g_imguiBackendInit.store(false);
         }
-    }
-
-    // Restore window procedure hook before resetting device
-    if (g_targetHwnd && g_origWndProc) {
-        SetWindowLongPtrW(g_targetHwnd, GWLP_WNDPROC,
-            reinterpret_cast<LONG_PTR>(g_origWndProc));
-        g_origWndProc = nullptr;
     }
 
     HRESULT hr = g_origReset(dev, pp);
