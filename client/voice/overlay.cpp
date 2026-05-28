@@ -1917,9 +1917,12 @@ HRESULT WINAPI HookEndScene(IDirect3DDevice9* dev) {
 
         ApplyL2GothicStyle();
 
-        g_origWndProc = reinterpret_cast<WNDPROC>(
-            SetWindowLongPtrW(hwnd, GWLP_WNDPROC,
-                              reinterpret_cast<LONG_PTR>(&HookedWndProc)));
+        WNDPROC cur = reinterpret_cast<WNDPROC>(GetWindowLongPtrW(hwnd, GWLP_WNDPROC));
+        if (cur != HookedWndProc) {
+            g_origWndProc = reinterpret_cast<WNDPROC>(
+                SetWindowLongPtrW(hwnd, GWLP_WNDPROC,
+                                  reinterpret_cast<LONG_PTR>(&HookedWndProc)));
+        }
 
         // Mic icon — embedded as RCDATA in the DLL (see
         // voice/resources.rc.in). Loaded via the shared helper so that
