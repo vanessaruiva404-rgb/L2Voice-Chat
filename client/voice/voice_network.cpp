@@ -254,10 +254,15 @@ struct VoiceNetwork::Impl {
             OutputDebugStringA("[l2voice] TrySendAuth: not connected yet\n");
             return;
         }
-        char dbg[256];
+        std::string ports_str;
+        for (size_t i = 0; i < client_ports.size(); ++i) {
+            if (i > 0) ports_str += ", ";
+            ports_str += std::to_string(client_ports[i]);
+        }
+        char dbg[512];
         _snprintf_s(dbg, sizeof(dbg), _TRUNCATE,
-            "[l2voice] TrySendAuth: sending %zu candidate ports\n",
-            client_ports.size());
+            "[l2voice] TrySendAuth: sending %zu candidate ports: [%s]\n",
+            client_ports.size(), ports_str.c_str());
         OutputDebugStringA(dbg);
         ws.send(MakeAuthJson(client_ports));
         auth_sent.store(true);
