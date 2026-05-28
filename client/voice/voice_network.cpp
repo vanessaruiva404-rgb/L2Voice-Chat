@@ -126,10 +126,7 @@ struct VoiceNetwork::Impl {
     PacketCallback on_packet;
     WsOpenCallback on_ws_open;   // fires inside the IXWebSocket Open handler
 
-    SOCKET udp_sock = INVALID_SOCKET;
-    sockaddr_in udp_dest{};
     ix::WebSocket ws;
-    std::thread udp_thread;
     std::atomic<bool> stopping{false};
 
     // sid → character name cache. Populated by name_result messages
@@ -179,71 +176,25 @@ struct VoiceNetwork::Impl {
         return WSAStartup(MAKEWORD(2, 2), &wsa) == 0;
     }
 
-    bool OpenUdp() {
-        udp_sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
-        if (udp_sock == INVALID_SOCKET) return false;
-        DWORD tv = 100;
-        setsockopt(udp_sock, SOL_SOCKET, SO_RCVTIMEO,
-                   (const char*)&tv, sizeof(tv));
-        return true;
-    }
+    void HandleBinaryWsMessage(const std::string& data) {
+        if (data.size() < 10) return;
+        const uint8_t* buf = reinterpret_cast<const uint8_t*>(data.data());
+        uint8_t ver = buf[0];
+        if (ver != 1) return;
+        uint8_t channel = buf[1];
+        uint16_t seq = (uint16_t)buf[2] | ((uint16_t)buf[3] << 8);
+        uint32_t src = (uint32_t)buf[4]
+                     | ((uint32_t)buf[5] << 8)
+                     | ((uint32_t)buf[6] << 16)
+                     | ((uint32_t)buf[7] << 24);
 
-    void SetUdpDest(const std::string& host, uint16_t port) {
-        std::memset(&udp_dest, 0, sizeof(udp_dest));
-        udp_dest.sin_family = AF_INET;
-        udp_dest.sin_port = htons(port);
-        inet_pton(AF_INET, host.c_str(), &udp_dest.sin_addr);
-        sockaddr_in local{};
-        local.sin_family = AF_INET;
-        local.sin_addr.s_addr = htonl(INADDR_ANY);
-        local.sin_port = 0;
-        bind(udp_sock, (sockaddr*)&local, sizeof(local));
-    }
+        uint8_t gain = buf[8];
+        int8_t  pan  = (int8_t)buf[9];
+        const uint8_t* opus = buf + 10;
+        uint16_t opus_len = (uint16_t)(data.size() - 10);
 
-    void UdpLoop() {
-        uint8_t buf[2048];
-        sockaddr_in from{};
-        int from_len = sizeof(from);
-        while (!stopping.load()) {
-            int n = recvfrom(udp_sock, (char*)buf, sizeof(buf), 0,
-                             (sockaddr*)&from, &from_len);
-            if (n < 8) continue;
-            uint8_t ver = buf[0];
-            if (ver != 1) continue;
-            uint8_t channel = buf[1];
-            uint16_t seq = (uint16_t)buf[2] | ((uint16_t)buf[3] << 8);
-            uint32_t src = (uint32_t)buf[4]
-                         | ((uint32_t)buf[5] << 8)
-                         | ((uint32_t)buf[6] << 16)
-                         | ((uint32_t)buf[7] << 24);
-
-            const uint8_t* opus = nullptr;
-            uint16_t opus_len = 0;
-            uint8_t gain = 255;
-            int8_t  pan  = 0;
-
-            // All audio channels use a uniform 10-byte header:
-            //     v(1) | ch(1) | seq(2) | sid(4) | gain(1) | pan(1) | opus...
-            // Egress channel mapping:
-            //   0 proximity, 1 party, 2 clan, 3 ally, 4 CC, 8 mode-unified.
-            // (5/6/7 are control frames — never carry audio on egress.)
-            if (channel == 0 ||
-                (channel >= 1 && channel <= 4) ||
-                channel == 8) {
-                if (n < 10) continue;
-                gain = buf[8];
-                pan  = (int8_t)buf[9];
-                opus = buf + 10;
-                opus_len = (uint16_t)(n - 10);
-            } else if (channel == 7) {          // ping_resp
-                continue;
-            } else {
-                continue;
-            }
-
-            if (on_packet) {
-                on_packet(channel, src, seq, gain, pan, opus, opus_len);
-            }
+        if (on_packet) {
+            on_packet(channel, src, seq, gain, pan, opus, opus_len);
         }
     }
 
@@ -279,7 +230,11 @@ struct VoiceNetwork::Impl {
                     udp_port.store(0);
                     break;
                 case ix::WebSocketMessageType::Message:
-                    HandleWsMessage(msg->str);
+                    if (msg->binary) {
+                        HandleBinaryWsMessage(msg->str);
+                    } else {
+                        HandleWsMessage(msg->str);
+                    }
                     break;
                 default:
                     break;
@@ -397,7 +352,6 @@ struct VoiceNetwork::Impl {
         }
         udp_host = host;
         udp_port.store(port);
-        SetUdpDest(host, port);
         char dbg[200];
         _snprintf_s(dbg, sizeof(dbg), _TRUNCATE,
             "[l2voice] auth_ok session_id=%u player_id=%u udp_endpoint=%s:%u\n",
@@ -414,12 +368,10 @@ bool VoiceNetwork::Start(const char* ws_url, AuthOkCallback on_auth,
                          PacketCallback on_packet) {
     if (!impl_->InitWinsock())   return false;
     ix::initNetSystem();
-    if (!impl_->OpenUdp())       return false;
     impl_->ws_url    = ws_url;
     impl_->on_auth   = std::move(on_auth);
     impl_->on_packet = std::move(on_packet);
     impl_->stopping.store(false);
-    impl_->udp_thread = std::thread([this] { impl_->UdpLoop(); });
     impl_->StartWs();
     return true;
 }
@@ -450,11 +402,6 @@ void VoiceNetwork::ResumeWs() {
 void VoiceNetwork::Stop() {
     if (!impl_) return;
     impl_->stopping.store(true);
-    if (impl_->udp_sock != INVALID_SOCKET) {
-        closesocket(impl_->udp_sock);
-        impl_->udp_sock = INVALID_SOCKET;
-    }
-    if (impl_->udp_thread.joinable()) impl_->udp_thread.join();
     impl_->ws.stop();
     ix::uninitNetSystem();
     WSACleanup();
@@ -484,10 +431,11 @@ void VoiceNetwork::SetClientPorts(const uint16_t* ports, size_t count) {
 
 void VoiceNetwork::SendProximityFrame(uint16_t seq,
                                       const uint8_t* opus, int opus_len) {
-    if (impl_->udp_port.load() == 0) {
+    uint32_t sid = impl_->session_id.load();
+    if (sid == 0) {
         static int once = 0;
         if (once++ == 0) {
-            OutputDebugStringA("[l2voice] SendProximityFrame skipped — udp_port==0 (auth_ok not parsed)\n");
+            OutputDebugStringA("[l2voice] SendProximityFrame skipped — session_id==0 (auth_ok not parsed)\n");
         }
         return;
     }
@@ -498,17 +446,16 @@ void VoiceNetwork::SendProximityFrame(uint16_t seq,
     pkt[1] = 0;                       // channel = proximity
     pkt[2] = (uint8_t)(seq & 0xFF);
     pkt[3] = (uint8_t)((seq >> 8) & 0xFF);
-    uint32_t sid = impl_->session_id.load();
     std::memcpy(pkt + 4, &sid, 4);
     std::memcpy(pkt + 8, opus, opus_len);
     int total = 8 + opus_len;
-    sendto(impl_->udp_sock, (const char*)pkt, total, 0,
-           (sockaddr*)&impl_->udp_dest, sizeof(impl_->udp_dest));
+    impl_->ws.send(std::string(reinterpret_cast<const char*>(pkt), total), true);
 }
 
 void VoiceNetwork::SendGroupFrame(uint8_t channel, uint16_t seq,
                                   const uint8_t* opus, int opus_len) {
-    if (impl_->udp_port.load() == 0) return;
+    uint32_t sid = impl_->session_id.load();
+    if (sid == 0) return;
     if (opus_len <= 0 || opus_len > 1024) return;
     if (channel < 1 || channel > 3) return;
     uint8_t pkt[1100];
@@ -516,12 +463,10 @@ void VoiceNetwork::SendGroupFrame(uint8_t channel, uint16_t seq,
     pkt[1] = channel;                 // 1=party, 2=clan, 3=ally
     pkt[2] = (uint8_t)(seq & 0xFF);
     pkt[3] = (uint8_t)((seq >> 8) & 0xFF);
-    uint32_t sid = impl_->session_id.load();
     std::memcpy(pkt + 4, &sid, 4);
     std::memcpy(pkt + 8, opus, opus_len);
     int total = 8 + opus_len;
-    sendto(impl_->udp_sock, (const char*)pkt, total, 0,
-           (sockaddr*)&impl_->udp_dest, sizeof(impl_->udp_dest));
+    impl_->ws.send(std::string(reinterpret_cast<const char*>(pkt), total), true);
 }
 
 void VoiceNetwork::SendPingTick() {
@@ -642,13 +587,12 @@ size_t VoiceNetwork::GetToasts(Toast* out, size_t cap) const {
 }
 
 void VoiceNetwork::SendKeepalive() {
-    if (impl_->udp_port.load() == 0) return;
+    uint32_t sid = impl_->session_id.load();
+    if (sid == 0) return;
     uint8_t pkt[8];
     pkt[0] = 1; pkt[1] = 5; pkt[2] = 0; pkt[3] = 0;
-    uint32_t sid = impl_->session_id.load();
     std::memcpy(pkt + 4, &sid, 4);
-    sendto(impl_->udp_sock, (const char*)pkt, 8, 0,
-           (sockaddr*)&impl_->udp_dest, sizeof(impl_->udp_dest));
+    impl_->ws.send(std::string(reinterpret_cast<const char*>(pkt), 8), true);
 }
 
 bool VoiceNetwork::IsConnected() const { return impl_->connected.load(); }
