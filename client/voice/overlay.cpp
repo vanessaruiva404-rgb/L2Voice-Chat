@@ -1663,6 +1663,19 @@ void DrawPanel() {
 // =============================================================
 
 LRESULT CALLBACK HookedWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
+    if (msg == WM_STYLECHANGING || msg == WM_SIZE || msg == WM_DISPLAYCHANGE) {
+        if (g_imguiBackendInit.load()) {
+            Logf("[l2voice] WndProc: msg=0x%04X, releasing D3D9 resources for display transition.\n", msg);
+            ImGui::SetCurrentContext(g_imguiCtx);
+            ImGui_ImplDX9_Shutdown();
+            ImGui_ImplWin32_Shutdown();
+            g_imguiBackendInit.store(false);
+
+            // Release all custom textures to prevent holding COM references to the lost/dead device
+            ReloadEmbeddedTextures(nullptr);
+        }
+    }
+
     if (msg == WM_KEYDOWN && (int)wp == g_toggleVk) {
         return 0;
     }
