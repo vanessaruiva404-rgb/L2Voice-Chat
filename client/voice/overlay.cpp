@@ -1535,7 +1535,7 @@ void DrawPanel() {
         static const char* kChanNamesEN[] = {"Proximity", "Party", "Clan", "Ally", "CC"};
         int tx = GetActiveTxChannel();
         if (tx < 0 || tx > 4) tx = 0;
-        ImGui::TextDisabled("TX:");
+        ImGui::TextDisabled(lang == 0 ? "Saída de voz:" : "Voice Output:");
         ImGui::SameLine();
         ImVec4 col = (tx == 0)
             ? ImVec4(180/255.f, 180/255.f, 180/255.f, 1.0f)
