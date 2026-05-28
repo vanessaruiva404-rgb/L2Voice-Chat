@@ -371,6 +371,11 @@ bool Init(const Config& cfg) {
     apmCfg.hpf_enabled = IniReadInt(L"apm_hpf",  apmCfg.hpf_enabled  ? 1 : 0) != 0;
     apmCfg.ns_enabled  = IniReadInt(L"apm_ns",   apmCfg.ns_enabled   ? 1 : 0) != 0;
     apmCfg.agc_enabled = IniReadInt(L"apm_agc",  apmCfg.agc_enabled  ? 1 : 0) != 0;
+    Logf("[l2voice] Init: APM configs loaded: aec=%d hpf=%d ns=%d agc=%d\n",
+         apmCfg.aec_enabled ? 1 : 0,
+         apmCfg.hpf_enabled ? 1 : 0,
+         apmCfg.ns_enabled ? 1 : 0,
+         apmCfg.agc_enabled ? 1 : 0);
     g_mod.apm.Configure(apmCfg);
 
     if (!g_mod.encoder.Init())                       return false;
