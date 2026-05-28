@@ -182,6 +182,50 @@ func handleWS(ctx context.Context, w http.ResponseWriter, r *http.Request,
 
 	sess := state.AllocSession(playerID)
 	sess.ClientIP = clientIP
+
+	// Notify peers when the connection exits.
+	// Since defers execute in LIFO order, this must be registered BEFORE
+	// state.Drop and reg.Unregister so it executes AFTER they run,
+	// ensuring LookupByPlayer(playerID) returns nil during peer state rebuilds.
+	defer func() {
+		p := worldState.Player(playerID)
+		if p == nil {
+			return
+		}
+		// Gather peers in Party, Clan, Ally, and CC
+		peers := map[uint32]struct{}{}
+		for _, id := range worldState.PartyMembers(playerID) {
+			if id != playerID {
+				peers[id] = struct{}{}
+			}
+		}
+		if p.ClanID != 0 {
+			for _, id := range worldState.ClanMembers(p.ClanID) {
+				if id != playerID {
+					peers[id] = struct{}{}
+				}
+			}
+		}
+		if p.AllyID != 0 {
+			for _, id := range worldState.AllyMembers(p.AllyID) {
+				if id != playerID {
+					peers[id] = struct{}{}
+				}
+			}
+		}
+		if cc := worldState.CommandChannel(playerID); cc != nil {
+			for _, id := range cc.MemberIDs {
+				if id != playerID {
+					peers[id] = struct{}{}
+				}
+			}
+		}
+		// Push updated voice-offline state to everyone affected
+		for peerID := range peers {
+			PushPlayerState(reg, worldState, state, peerID)
+		}
+	}()
+
 	defer state.Drop(sess.ID)
 
 	// Register the player in the world (if not yet seen via Redis
