@@ -92,17 +92,18 @@ func (b *BridgeLink) rpcCall(payload map[string]interface{}, timeout time.Durati
 }
 
 // RPCWhoami asks the bridge to resolve a player_id from the given
-// client IP and candidate TCP source ports. Returns 0 if no match.
-func (b *BridgeLink) RPCWhoami(ip string, ports []uint16) (uint32, error) {
+// client IP, candidate TCP source ports and optional character name. Returns 0 if no match.
+func (b *BridgeLink) RPCWhoami(ip string, ports []uint16, charName string) (uint32, error) {
 	// Marshal ports as an integer array for the Java side.
 	portInts := make([]int, len(ports))
 	for i, p := range ports {
 		portInts[i] = int(p)
 	}
 	r, err := b.rpcCall(map[string]interface{}{
-		"type":  "rpc_whoami",
-		"ip":    ip,
-		"ports": portInts,
+		"type":      "rpc_whoami",
+		"ip":        ip,
+		"ports":     portInts,
+		"char_name": charName,
 	}, 3*time.Second)
 	if err != nil {
 		return 0, err
