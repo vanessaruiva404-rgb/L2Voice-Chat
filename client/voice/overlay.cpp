@@ -1665,9 +1665,20 @@ void DrawPanel() {
 // =============================================================
 
 LRESULT CALLBACK HookedWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
-    if (msg == WM_STYLECHANGING || msg == WM_SIZE || msg == WM_DISPLAYCHANGE) {
+    bool isDisplayTransition = false;
+    if (msg == WM_STYLECHANGING || msg == WM_SIZE || msg == WM_DISPLAYCHANGE || msg == WM_WINDOWPOSCHANGING) {
+        isDisplayTransition = true;
+    } else if (msg == WM_SYSCOMMAND && (wp & 0xFFF0) == SC_KEYMENU) {
+        isDisplayTransition = true;
+    } else if ((msg == WM_SYSKEYDOWN || msg == WM_SYSKEYUP) && wp == VK_RETURN) {
+        isDisplayTransition = true;
+    } else if ((msg == WM_KEYDOWN || msg == WM_KEYUP) && wp == VK_RETURN && ((GetKeyState(VK_MENU) & 0x8000) != 0)) {
+        isDisplayTransition = true;
+    }
+
+    if (isDisplayTransition) {
         if (g_imguiBackendInit.load()) {
-            Logf("[l2voice] WndProc: msg=0x%04X, releasing D3D9 resources for display transition.\n", msg);
+            Logf("[l2voice] WndProc: msg=0x%04X wp=0x%08X, display transition detected. Releasing all D3D9 resources.\n", msg, wp);
             ImGui::SetCurrentContext(g_imguiCtx);
             ImGui_ImplDX9_Shutdown();
             ImGui_ImplWin32_Shutdown();
