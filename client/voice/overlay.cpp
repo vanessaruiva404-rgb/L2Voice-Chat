@@ -704,10 +704,9 @@ void DrawProximityTab(const OverlayState& st) {
         SetRequireFocus(focus);
     }
     bool on = st.always_on;
-    if (ImGui::Checkbox(lang == 0 ? "sempre ativo (sem PTT)" : "always on (no PTT)", &on)) {
+    if (ImGui::Checkbox(lang == 0 ? "desativar PTT (microfone sempre ativo)" : "disable PTT (always-on mic)", &on)) {
         SetAlwaysOn(on);
     }
-
     // Transmit-here selector — mirrors the radio on group tabs. The
     // Proximity tab is the default; toggling off here would put TX
     // in a no-channel state, so we don't allow that — clicking just
