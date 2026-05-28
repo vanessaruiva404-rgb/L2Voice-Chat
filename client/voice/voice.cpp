@@ -147,6 +147,8 @@ void OnCaptureFrame(const int16_t* pcm, uint32_t samples) {
     if (!transmit) return;
     if (!g_mod.net.IsConnected()) return;
 
+    Logf("[l2voice] OnCaptureFrame: starting transmit. channel=%u\n", (unsigned)channel);
+
     // APM: AEC → HPF → NS (rnnoise) → AGC. Operates in-place on a
     // mutable copy of the frame so the capture caller still owns its
     // buffer. The AEC reference is the most recent 20ms of mixed
@@ -157,15 +159,21 @@ void OnCaptureFrame(const int16_t* pcm, uint32_t samples) {
     std::memcpy(apm_pcm, pcm, samples * sizeof(int16_t));
     int16_t aec_ref[kFrameSamples];
     g_mod.playback.PopPlaybackReference(aec_ref, kFrameSamples);
+    
+    Logf("[l2voice] OnCaptureFrame: before ProcessFrame\n");
     g_mod.apm.ProcessFrame(apm_pcm, samples, aec_ref);
-
+    
+    Logf("[l2voice] OnCaptureFrame: before Encode\n");
     uint8_t opus_buf[kMaxPacketBytes];
     int n = g_mod.encoder.Encode(apm_pcm, opus_buf, sizeof(opus_buf));
+    Logf("[l2voice] OnCaptureFrame: after Encode n=%d\n", n);
     if (n <= 0) return;
 
     uint16_t seq = g_mod.tx_seq.fetch_add(1, std::memory_order_relaxed);
+    Logf("[l2voice] OnCaptureFrame: before Send proximity/group channel=%u seq=%u\n", (unsigned)channel, (unsigned)seq);
     if (channel == 0) g_mod.net.SendProximityFrame(seq, opus_buf, n);
     else              g_mod.net.SendGroupFrame(channel, seq, opus_buf, n);
+    Logf("[l2voice] OnCaptureFrame: transmit done\n");
 }
 
 void OnIncomingPacket(uint8_t channel, uint32_t src, uint16_t /*seq*/,
@@ -184,6 +192,9 @@ void OnIncomingPacket(uint8_t channel, uint32_t src, uint16_t /*seq*/,
             rx, channel, src, gain_u8, pan_i8, opus_len);
         OutputDebugStringA(dbg);
     }
+
+    Logf("[l2voice] OnIncomingPacket: ch=%u src=%u len=%u\n", (unsigned)channel, src, (unsigned)opus_len);
+
     // Channel 0 = proximity (server-stamped gain/pan).
     // Channels 1..4 = group voice (party/clan/ally/CC). The server's
     // router pre-applies channel volume + per-player volume into gain
@@ -197,15 +208,22 @@ void OnIncomingPacket(uint8_t channel, uint32_t src, uint16_t /*seq*/,
     }
 
     VoiceOpusDecoder* dec = g_mod.DecoderFor(src);
-    if (!dec) return;
+    if (!dec) {
+        Logf("[l2voice] OnIncomingPacket: DecoderFor returned null\n");
+        return;
+    }
 
     int16_t pcm[kFrameSamples];
+    Logf("[l2voice] OnIncomingPacket: before Decode\n");
     int got = dec->Decode(opus_payload, opus_len, pcm, kFrameSamples);
+    Logf("[l2voice] OnIncomingPacket: after Decode got=%d\n", got);
     if (got <= 0) return;
 
     float gain = (float)gain_u8 / 255.0f;
     float pan  = (float)pan_i8  / 127.0f;
+    Logf("[l2voice] OnIncomingPacket: before Enqueue got=%d gain=%.3f pan=%.3f\n", got, gain, pan);
     g_mod.playback.Enqueue(src, pcm, (uint32_t)got, gain, pan);
+    Logf("[l2voice] OnIncomingPacket: Enqueue done\n");
 }
 
 }  // namespace
