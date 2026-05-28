@@ -17,6 +17,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/url"
 	"strconv"
 	"sync"
 	"time"
@@ -47,6 +48,7 @@ type authMsg struct {
 	Type          string   `json:"type"`
 	Ports         []uint16 `json:"ports"`           // local TCP source ports owned by the L2.exe process
 	ClientVersion string   `json:"client_version,omitempty"`
+	CharName      string   `json:"char_name,omitempty"`
 }
 
 // authOk is the success response.
@@ -163,7 +165,7 @@ func handleWS(ctx context.Context, w http.ResponseWriter, r *http.Request,
 			_ = conn.WriteJSON(authFail{Type: "auth_fail", Reason: "auth_timeout"})
 			return
 		}
-		pid, lookupErr := whoamiLookup(clientIP, msg.Ports)
+		pid, lookupErr := whoamiLookup(clientIP, msg.Ports, msg.CharName)
 		if lookupErr == nil && pid != 0 {
 			playerID = pid
 			break
@@ -439,9 +441,9 @@ func indexLastByte(s string, b byte) int {
 // Phase A: prefer the outbound bridge link (RPC over WS). Fall back
 // to the inbound HTTP callback when no bridge is connected — keeps
 // pure-Redis deployments backwards-compatible while we transition.
-func whoamiLookup(clientIP string, ports []uint16) (uint32, error) {
+func whoamiLookup(clientIP string, ports []uint16, charName string) (uint32, error) {
 	if b := FirstActiveBridge(); b != nil {
-		pid, err := b.RPCWhoami(clientIP, ports)
+		pid, err := b.RPCWhoami(clientIP, ports, charName)
 		if err == nil {
 			return pid, nil
 		}
@@ -459,8 +461,11 @@ func whoamiLookup(clientIP string, ports []uint16) (uint32, error) {
 		csv = strconv.AppendUint(csv, uint64(p), 10)
 	}
 	client := http.Client{Timeout: 2 * time.Second}
-	url := fmt.Sprintf("%s?ip=%s&ports=%s", whoamiEndpoint, clientIP, csv)
-	resp, err := client.Get(url)
+	urlStr := fmt.Sprintf("%s?ip=%s&ports=%s", whoamiEndpoint, clientIP, csv)
+	if charName != "" {
+		urlStr += "&char_name=" + url.QueryEscape(charName)
+	}
+	resp, err := client.Get(urlStr)
 	if err != nil {
 		return 0, err
 	}
