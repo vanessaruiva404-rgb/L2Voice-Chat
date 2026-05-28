@@ -724,7 +724,7 @@ void DrawProximityTab(const OverlayState& st) {
     ImGui::Spacing();
 
     // ----- PTT -----
-    ImGui::TextUnformatted(lang == 0 ? "pressionar para falar (PTT)" : "push-to-talk");
+    ImGui::TextUnformatted(lang == 0 ? "pressionar para falar" : "push-to-talk");
     ImGui::SameLine();
     bool capturing = g_captureNextKey.load() && g_captureNextSlot.load() == 0;
     if (capturing) {
@@ -961,7 +961,7 @@ void DrawGroupTab(const OverlayState& st, int channelId, const char* label) {
     else if (channelId == 3) { pttVk = GetPttAllyVk();  slot = 3; }
     if (channelId >= 1 && channelId <= 3) {
         ImGui::Spacing();
-        ImGui::TextUnformatted(lang == 0 ? "pressionar para falar (PTT)" : "push-to-talk");
+        ImGui::TextUnformatted(lang == 0 ? "pressionar para falar" : "push-to-talk");
         ImGui::SameLine();
         bool capturing = g_captureNextKey.load() && g_captureNextSlot.load() == slot;
         if (capturing) {
