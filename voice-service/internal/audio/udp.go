@@ -123,10 +123,11 @@ const (
 )
 
 // rxCount is a session-id keyed counter of inbound proximity packets,
-// used only for diagnostic log throttling. Not thread-safe by itself,
-// but the UDP loop is single-threaded so concurrent writes can't
-// happen.
-var rxCount = map[uint32]uint64{}
+// used only for diagnostic log throttling. Protected by rxCountMu.
+var (
+	rxCountMu sync.Mutex
+	rxCount   = map[uint32]uint64{}
+)
 
 // Config bundles router-mode flags.
 type Config struct {
@@ -239,10 +240,15 @@ func routeProximity(seqLo uint16, srcSID uint32, opus []byte,
 
 	// Diagnostic: per-session rolling counter so the operator can see
 	// audio is actually arriving server-side.
+	rxCountMu.Lock()
 	rxCount[srcSID]++
-	if rxCount[srcSID]%50 == 1 {
+	count := rxCount[srcSID]
+	rxCountMu.Unlock()
+
+	shouldLog := count%50 == 1
+	if shouldLog {
 		log.Printf("audio: sid=%d rx=#%d speakerPos=%v",
-			srcSID, rxCount[srcSID], speakerHasPos)
+			srcSID, count, speakerHasPos)
 	}
 
 	// Egress buffer (header + spatial + opus). Reused per send.
@@ -267,13 +273,13 @@ func routeProximity(seqLo uint16, srcSID uint32, opus []byte,
 	}
 
 	neighbors := state.ProximityNeighbors(speaker, MaxDistance)
-	if rxCount[srcSID]%50 == 1 {
+	if shouldLog {
 		log.Printf("audio: sid=%d neighbors=%d (max range %.0fcm)",
 			srcSID, len(neighbors), MaxDistance)
 	}
 	for _, recv := range neighbors {
 		if recv.UDPAddr == nil {
-			if rxCount[srcSID]%50 == 1 {
+			if shouldLog {
 				log.Printf("audio:   skip recv sid=%d — no UDPAddr yet", recv.ID)
 			}
 			continue
@@ -290,14 +296,14 @@ func routeProximity(seqLo uint16, srcSID uint32, opus []byte,
 		// the operator is opening multiple clients on purpose.
 		if cfg.MultiboxMute && speaker.UDPAddr != nil && recv.UDPAddr != nil &&
 			speaker.UDPAddr.IP.Equal(recv.UDPAddr.IP) {
-			if rxCount[srcSID]%50 == 1 {
+			if shouldLog {
 				log.Printf("audio:   skip recv sid=%d — multibox (same IP %s)",
 					recv.ID, recv.UDPAddr.IP)
 			}
 			continue
 		}
 		if !recv.PositionKnown(now) {
-			if rxCount[srcSID]%50 == 1 {
+			if shouldLog {
 				log.Printf("audio:   skip recv sid=%d — no position", recv.ID)
 			}
 			continue
@@ -324,7 +330,7 @@ func routeProximity(seqLo uint16, srcSID uint32, opus []byte,
 		out[8] = uint8(gainF*255 + 0.5)
 		out[9] = byte(int8(panF*127 + 0.5))
 		n, werr := conn.WriteToUDP(out, recv.UDPAddr)
-		if rxCount[srcSID]%50 == 1 {
+		if shouldLog {
 			log.Printf("audio:   -> recv sid=%d dist=%.0f gain=%d wrote=%d err=%v",
 				recv.ID, dist, out[8], n, werr)
 		}
@@ -358,7 +364,13 @@ func routeViaRouter(channel uint8, seqLo uint16, srcSID uint32, opus []byte,
 		Z:          speaker.Z,
 	}
 	decisions := router.Route(pkt, worldState, router.DefaultConfig())
-	if rxCount[srcSID]%50 == 1 {
+
+	rxCountMu.Lock()
+	count := rxCount[srcSID]
+	rxCountMu.Unlock()
+
+	shouldLog := count%50 == 1
+	if shouldLog {
 		log.Printf("audio: sid=%d (pid=%d) ch=%d -> %d recipients via router",
 			srcSID, speaker.PlayerID, channel, len(decisions))
 	}
@@ -412,10 +424,15 @@ func RouteWebSocketProximity(seqLo uint16, srcSID uint32, opus []byte,
 	now := time.Now()
 	speakerHasPos := speaker.PositionKnown(now)
 
+	rxCountMu.Lock()
 	rxCount[srcSID]++
-	if rxCount[srcSID]%50 == 1 {
+	count := rxCount[srcSID]
+	rxCountMu.Unlock()
+
+	shouldLog := count%50 == 1
+	if shouldLog {
 		log.Printf("audio(ws): sid=%d rx=#%d speakerPos=%v",
-			srcSID, rxCount[srcSID], speakerHasPos)
+			srcSID, count, speakerHasPos)
 	}
 
 	// Egress buffer (header + spatial + opus). Reused per send.
@@ -438,7 +455,7 @@ func RouteWebSocketProximity(seqLo uint16, srcSID uint32, opus []byte,
 	}
 
 	neighbors := state.ProximityNeighbors(speaker, MaxDistance)
-	if rxCount[srcSID]%50 == 1 {
+	if shouldLog {
 		log.Printf("audio(ws): sid=%d neighbors=%d (max range %.0fcm)",
 			srcSID, len(neighbors), MaxDistance)
 	}
@@ -495,7 +512,13 @@ func RouteWebSocketGroup(channel uint8, seqLo uint16, srcSID uint32, opus []byte
 		Z:          speaker.Z,
 	}
 	decisions := router.Route(pkt, worldState, router.DefaultConfig())
-	if rxCount[srcSID]%50 == 1 {
+
+	rxCountMu.Lock()
+	count := rxCount[srcSID]
+	rxCountMu.Unlock()
+
+	shouldLog := count%50 == 1
+	if shouldLog {
 		log.Printf("audio(ws): sid=%d (pid=%d) ch=%d -> %d recipients via router",
 			srcSID, speaker.PlayerID, channel, len(decisions))
 	}
