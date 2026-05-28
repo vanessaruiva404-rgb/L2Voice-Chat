@@ -23,6 +23,14 @@ func (c *Client) Send(v interface{}) error {
 	return c.conn.WriteJSON(v)
 }
 
+// SendBinary writes raw binary bytes to the underlying conn as a BinaryMessage.
+// Safe for concurrent callers (write is serialized).
+func (c *Client) SendBinary(data []byte) error {
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
+	return c.conn.WriteMessage(websocket.BinaryMessage, data)
+}
+
 // ConnReg holds the live WS clients keyed by session ID.
 // Lookups happen on every clan event broadcast, so RLock-heavy reads.
 type ConnReg struct {
@@ -76,6 +84,17 @@ func (r *ConnReg) SendToPlayer(pid uint32, v interface{}) bool {
 		return false
 	}
 	_ = c.Send(v)
+	return true
+}
+
+// SendBinaryToPlayer writes a raw binary message to the connection of `pid` if one is alive.
+// Returns false silently if the player is offline.
+func (r *ConnReg) SendBinaryToPlayer(pid uint32, data []byte) bool {
+	c := r.ClientByPlayer(pid)
+	if c == nil {
+		return false
+	}
+	_ = c.SendBinary(data)
 	return true
 }
 
