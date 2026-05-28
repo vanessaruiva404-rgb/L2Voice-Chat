@@ -1817,35 +1817,15 @@ HRESULT WINAPI HookEndScene(IDirect3DDevice9* dev) {
     static IDirect3DDevice9* s_knownDev = nullptr;
     if (dev != s_knownDev) {
         if (s_knownDev != nullptr) {
-            // Device was replaced — reinit ImGui DX9 backend.
-            Logf("[l2voice] EndScene: device changed %p->%p, reinitialising ImGui DX9\n",
+            Logf("[l2voice] EndScene: device changed %p->%p, triggers full clean reinitialisation\n",
                  s_knownDev, dev);
             if (g_imguiCtx) {
                 ImGui::SetCurrentContext(g_imguiCtx);
                 if (g_imguiBackendInit.load()) {
                     ImGui_ImplDX9_Shutdown();
-                } else if (g_targetHwnd) {
-                    ImGui_ImplWin32_Init(g_targetHwnd);
+                    ImGui_ImplWin32_Shutdown();
+                    g_imguiBackendInit.store(false);
                 }
-                ImGui_ImplDX9_Init(dev);
-                ImGui_ImplDX9_CreateDeviceObjects();
-                // Reinstall WndProc if AbstractEx reset it.
-                if (g_targetHwnd) {
-                    WNDPROC cur = reinterpret_cast<WNDPROC>(
-                        GetWindowLongPtrW(g_targetHwnd, GWLP_WNDPROC));
-                    if (cur != HookedWndProc) {
-                        g_origWndProc = cur;
-                        SetWindowLongPtrW(g_targetHwnd, GWLP_WNDPROC,
-                            reinterpret_cast<LONG_PTR>(&HookedWndProc));
-                        Logf("[l2voice] EndScene: WndProc hook reinstalled after device change\n");
-                    }
-                }
-                g_imguiBackendInit.store(true);
-                // Reload all custom textures for the new device.
-                // Without this they still point to the old dead device
-                // and appear garbled or invisible.
-                ReloadEmbeddedTextures(dev);
-                Logf("[l2voice] EndScene: ImGui DX9 reinit complete\n");
             }
         }
         s_knownDev = dev;
@@ -1960,49 +1940,21 @@ HRESULT WINAPI HookEndScene(IDirect3DDevice9* dev) {
 }
 
 HRESULT WINAPI HookReset(IDirect3DDevice9* dev, D3DPRESENT_PARAMETERS* pp) {
-    Logf("[l2voice] HookReset called — reinitialising ImGui DX9. backend=%d\n",
+    Logf("[l2voice] HookReset called — invalidating ImGui backends. backend=%d\n",
          g_imguiBackendInit.load() ? 1 : 0);
 
     if (g_imguiCtx) {
         ImGui::SetCurrentContext(g_imguiCtx);
         if (g_imguiBackendInit.load()) {
-            ImGui_ImplDX9_Shutdown();  // full release
+            ImGui_ImplDX9_Shutdown();
+            ImGui_ImplWin32_Shutdown();
+            g_imguiBackendInit.store(false);
         }
     }
 
     HRESULT hr = g_origReset(dev, pp);
     Logf("[l2voice] HookReset: g_origReset returned 0x%08X\n", (unsigned)hr);
 
-    if (SUCCEEDED(hr) && g_imguiCtx) {
-        ImGui::SetCurrentContext(g_imguiCtx);
-        if (!g_imguiBackendInit.load() && g_targetHwnd) {
-            ImGui_ImplWin32_Init(g_targetHwnd);
-        }
-        ImGui_ImplDX9_Init(dev);          // reinit with same (recovered) device
-        ImGui_ImplDX9_CreateDeviceObjects();
-        g_imguiBackendInit.store(true);
-        Logf("[l2voice] HookReset: ImGui DX9 fully reinitialized\n");
-
-        // Reinstall WndProc if AbstractEx replaced it during the reset cycle.
-        if (g_targetHwnd) {
-            WNDPROC cur = reinterpret_cast<WNDPROC>(
-                GetWindowLongPtrW(g_targetHwnd, GWLP_WNDPROC));
-            if (cur != HookedWndProc) {
-                g_origWndProc = cur;
-                SetWindowLongPtrW(g_targetHwnd, GWLP_WNDPROC,
-                    reinterpret_cast<LONG_PTR>(&HookedWndProc));
-                Logf("[l2voice] HookReset: WndProc hook reinstalled\n");
-            }
-        }
-    } else if (g_imguiCtx) {
-        // If Reset failed, safely shut down Win32 and mark backend as uninitialized.
-        // HookEndScene will perform a clean, full reinitialization once the device is recovered.
-        if (g_imguiBackendInit.load()) {
-            ImGui_ImplWin32_Shutdown();
-            g_imguiBackendInit.store(false);
-            Logf("[l2voice] HookReset: Reset failed, shut down Win32 backend\n");
-        }
-    }
     return hr;
 }
 
