@@ -11,15 +11,15 @@
 
 namespace voice {
 
-OpusEncoder::OpusEncoder() : enc_(nullptr) {}
-OpusEncoder::~OpusEncoder() {
+VoiceOpusEncoder::VoiceOpusEncoder() : enc_(nullptr) {}
+VoiceOpusEncoder::~VoiceOpusEncoder() {
     if (enc_) {
         opus_encoder_destroy(static_cast<::OpusEncoder*>(enc_));
         enc_ = nullptr;
     }
 }
 
-bool OpusEncoder::Init() {
+bool VoiceOpusEncoder::Init() {
     if (enc_) return true;
     int err = 0;
     auto* e = opus_encoder_create(kSampleRate, /*channels*/ 1,
@@ -34,22 +34,22 @@ bool OpusEncoder::Init() {
     return true;
 }
 
-int OpusEncoder::Encode(const int16_t* pcm, uint8_t* out_buf, int out_buf_size) {
+int VoiceOpusEncoder::Encode(const int16_t* pcm, uint8_t* out_buf, int out_buf_size) {
     if (!enc_) return 0;
     int n = opus_encode(static_cast<::OpusEncoder*>(enc_),
                         pcm, kFrameSamples, out_buf, out_buf_size);
     return (n > 0) ? n : 0;
 }
 
-OpusDecoder::OpusDecoder() : dec_(nullptr) {}
-OpusDecoder::~OpusDecoder() {
+VoiceOpusDecoder::VoiceOpusDecoder() : dec_(nullptr) {}
+VoiceOpusDecoder::~VoiceOpusDecoder() {
     if (dec_) {
         opus_decoder_destroy(static_cast<::OpusDecoder*>(dec_));
         dec_ = nullptr;
     }
 }
 
-bool OpusDecoder::Init() {
+bool VoiceOpusDecoder::Init() {
     if (dec_) return true;
     int err = 0;
     auto* d = opus_decoder_create(kSampleRate, /*channels*/ 1, &err);
@@ -58,7 +58,7 @@ bool OpusDecoder::Init() {
     return true;
 }
 
-int OpusDecoder::Decode(const uint8_t* in_buf, int in_size,
+int VoiceOpusDecoder::Decode(const uint8_t* in_buf, int in_size,
                         int16_t* out_pcm, int out_max_samples) {
     if (!dec_) return 0;
     int n = opus_decode(static_cast<::OpusDecoder*>(dec_),
