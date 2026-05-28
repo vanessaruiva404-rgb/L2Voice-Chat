@@ -221,9 +221,59 @@ void OnIncomingPacket(uint8_t channel, uint32_t src, uint16_t /*seq*/,
 
     float gain = (float)gain_u8 / 255.0f;
     float pan  = (float)pan_i8  / 127.0f;
+
+    char spName[64];
+    if (GetSpeakerName(src, spName, sizeof(spName)) && spName[0]) {
+        uint32_t pid = GetPlayerIdByName(spName);
+        if (pid != 0) {
+            if (IsPlayerMuted(pid)) {
+                gain = 0.0f;
+            } else {
+                gain *= GetPlayerVolume(pid);
+            }
+        }
+    }
+
     Logf("[l2voice] OnIncomingPacket: before Enqueue got=%d gain=%.3f pan=%.3f\n", got, gain, pan);
     g_mod.playback.Enqueue(src, pcm, (uint32_t)got, gain, pan);
     Logf("[l2voice] OnIncomingPacket: Enqueue done\n");
+}
+
+std::unordered_map<uint32_t, bool>  g_local_muted;
+std::unordered_map<uint32_t, float> g_local_volume;
+std::mutex                          g_local_prefs_mu;
+
+uint32_t GetPlayerIdByName(const char* name) {
+    if (!name || !name[0]) return 0;
+    for (uint8_t g = 1; g <= 4; ++g) {
+        OverlayMember roster[64];
+        size_t count = GetGroupRoster(g, roster, 64);
+        for (size_t i = 0; i < count; ++i) {
+            char memName[64];
+            if (GetPlayerName(roster[i].player_id, memName, sizeof(memName)) && _stricmp(memName, name) == 0) {
+                return roster[i].player_id;
+            }
+        }
+    }
+    return 0;
+}
+
+void UpdateActiveSpeakerLocalMuteVolume(uint32_t player_id) {
+    char memName[64];
+    if (!GetPlayerName(player_id, memName, sizeof(memName)) || !memName[0]) return;
+    
+    SpeakerInfo speakers[64];
+    size_t count = 0;
+    g_mod.playback.GetSpeakerInfos(speakers, 64, count);
+    for (size_t i = 0; i < count; ++i) {
+        char spName[64];
+        if (GetSpeakerName(speakers[i].src_id, spName, sizeof(spName)) && _stricmp(spName, memName) == 0) {
+            bool muted = IsPlayerMuted(player_id);
+            float vol = GetPlayerVolume(player_id);
+            g_mod.playback.SetSourceMuted(speakers[i].src_id, muted);
+            g_mod.playback.SetSourceVolume(speakers[i].src_id, muted ? 0.0f : vol);
+        }
+    }
 }
 
 }  // namespace
@@ -246,6 +296,7 @@ Config DefaultConfig() {
     c.require_focus = true;
     c.always_on     = false;
     c.master_volume = 1.0f;
+    c.char_name[0]  = 0;
     return c;
 }
 
@@ -301,6 +352,7 @@ bool LoadConfigFromIni(const wchar_t* path, Config* out) {
     getS(L"ws_url", c.ws_url, sizeof(c.ws_url), c.ws_url);
     getS(L"capture_device", c.capture_device, sizeof(c.capture_device), "");
     getS(L"playback_device", c.playback_device, sizeof(c.playback_device), "");
+    getS(L"char_name", c.char_name, sizeof(c.char_name), "");
     c.min_dist_cm    = (float)getI(L"min_dist_cm", (int)c.min_dist_cm);
     c.max_dist_cm    = (float)getI(L"max_dist_cm", (int)c.max_dist_cm);
     c.ptt_proximity  = getI(L"ptt_proximity",  c.ptt_proximity);
@@ -491,7 +543,7 @@ void RefreshClientPorts() {
     g_last_port_count = ports.size();
 
     if (ports.empty()) return;
-    g_mod.net.SetClientPorts(ports.data(), ports.size());
+    g_mod.net.SetClientPorts(ports.data(), ports.size(), g_mod.cfg.char_name);
 }
 
 void Shutdown() {
@@ -519,6 +571,8 @@ OverlayState SnapshotOverlayState() {
         s.ch_enabled[i] = g_mod.ch_prefs.enabled[i];
         s.ch_volume[i]  = g_mod.ch_prefs.volume[i];
     }
+    std::strncpy(s.char_name, g_mod.cfg.char_name, sizeof(s.char_name) - 1);
+    s.char_name[sizeof(s.char_name) - 1] = 0;
     return s;
 }
 
@@ -711,6 +765,47 @@ void SetAuthToken(const char* /*token*/, uint32_t /*player_id*/) {
     // Deprecated — identity is resolved server-side via TCP source-
     // port matching now. Left as a no-op so the public API doesn't
     // break callers that wired it up (none today).
+}
+
+bool IsPlayerMuted(uint32_t player_id) {
+    std::lock_guard<std::mutex> lk(g_local_prefs_mu);
+    auto it = g_local_muted.find(player_id);
+    return it != g_local_muted.end() ? it->second : false;
+}
+
+void SetPlayerMuted(uint32_t player_id, bool muted) {
+    {
+        std::lock_guard<std::mutex> lk(g_local_prefs_mu);
+        g_local_muted[player_id] = muted;
+    }
+    UpdateActiveSpeakerLocalMuteVolume(player_id);
+}
+
+float GetPlayerVolume(uint32_t player_id) {
+    std::lock_guard<std::mutex> lk(g_local_prefs_mu);
+    auto it = g_local_volume.find(player_id);
+    return it != g_local_volume.end() ? it->second : 1.0f;
+}
+
+void SetPlayerVolume(uint32_t player_id, float volume) {
+    {
+        std::lock_guard<std::mutex> lk(g_local_prefs_mu);
+        g_local_volume[player_id] = volume;
+    }
+    UpdateActiveSpeakerLocalMuteVolume(player_id);
+}
+
+void SetCharName(const char* name) {
+    if (!name) return;
+    std::strncpy(g_mod.cfg.char_name, name, sizeof(g_mod.cfg.char_name) - 1);
+    g_mod.cfg.char_name[sizeof(g_mod.cfg.char_name) - 1] = 0;
+    if (g_mod.ini_path[0] != 0) {
+        wchar_t wName[64] = {};
+        size_t dummy = 0;
+        mbstowcs_s(&dummy, wName, name, _TRUNCATE);
+        WritePrivateProfileStringW(L"voice", L"char_name", wName, g_mod.ini_path);
+    }
+    RefreshClientPorts();
 }
 
 bool HasActiveSpeakers() {
