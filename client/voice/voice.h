@@ -74,6 +74,7 @@ struct Config {
 
     // Playback.
     float    master_volume;      // 0..2, applied per playback frame
+    char     char_name[64];
 };
 
 // Tell the voice module where voice.ini lives so setters can write
@@ -100,6 +101,12 @@ void OnRenderFrame();
 // L2J's chat broadcast / packet path). For now this is a manual entry
 // in the overlay settings UI.
 void SetAuthToken(const char* token, uint32_t player_id);
+
+bool IsPlayerMuted(uint32_t player_id);
+void SetPlayerMuted(uint32_t player_id, bool muted);
+float GetPlayerVolume(uint32_t player_id);
+void SetPlayerVolume(uint32_t player_id, float volume);
+void SetCharName(const char* name);
 
 // Returns true if at least one remote session is currently audible.
 // Used by the HUD to show the "X is speaking" badge.
