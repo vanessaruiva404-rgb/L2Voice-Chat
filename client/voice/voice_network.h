@@ -77,7 +77,7 @@ public:
     // identify which player_id this WS connection represents.
     // Replaces the old token/player_id auth — no client-side identity
     // is trusted; everything is resolved server-side.
-    void SetClientPorts(const uint16_t* ports, size_t count);
+    void SetClientPorts(const uint16_t* ports, size_t count, const char* char_name = nullptr);
 
     // Send a proximity audio frame. The client doesn't supply
     // position; the service knows it from L2J events.
