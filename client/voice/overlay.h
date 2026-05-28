@@ -12,6 +12,8 @@
 
 #include <cstdint>
 
+void Logf(const char* fmt, ...);
+
 namespace voice {
 
 // Install the D3D9 hook + ImGui context. Idempotent. Safe to call
