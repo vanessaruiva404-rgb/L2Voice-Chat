@@ -10,15 +10,18 @@
 # Output: build/Release/l2voice.dll
 
 cmake_minimum_required(VERSION 3.20)
+
+# Link C++ Runtime statically (/MT in Release, /MTd in Debug) so players don't
+# need the Microsoft Visual C++ Redistributable installed.
+# MUST be set before the project() command to apply to all Fetched dependencies.
+set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+
 project(l2voice LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-# Link C++ Runtime statically (/MT in Release, /MTd in Debug) so players don't
-# need the Microsoft Visual C++ Redistributable installed.
-set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 
 # L2 client is 32-bit. Refuse to configure as 64-bit so the user can't
 # accidentally build a DLL the client can't load.
