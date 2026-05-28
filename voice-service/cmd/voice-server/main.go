@@ -92,7 +92,7 @@ func main() {
 
 	// WebSocket control plane runs in main goroutine; HTTP handler hosts /ws.
 	go func() {
-		if err := control.Serve(ctx, *wsAddr, state, worldState, connReg); err != nil {
+		if err := control.Serve(ctx, *wsAddr, state, worldState, connReg, audioCfg); err != nil {
 			log.Fatalf("control.Serve: %v", err)
 		}
 	}()
