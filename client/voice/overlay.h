@@ -79,6 +79,8 @@ int  GetActiveTxChannel();
 // Round-trip latency to the voice-service in ms (WS ping/pong). -1 when
 // no reply has arrived yet (just-connected or disconnected).
 int  GetVoicePingMs();
+int  GetLanguagePref();
+void SetLanguagePref(int lang);
 
 // Persisted UI element positions. Each pair has its own key in voice.ini.
 // Getters return 0/0 when no value is stored. Setters write to voice.ini.
