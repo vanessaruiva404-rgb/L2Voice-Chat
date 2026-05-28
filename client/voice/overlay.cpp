@@ -401,19 +401,19 @@ void VkToString(int vk, char* out, size_t cap) {
     if (cap == 0) return;
     const char* fixed = nullptr;
     switch (vk) {
-        case VK_LBUTTON:  fixed = "Mouse L"; break;
-        case VK_RBUTTON:  fixed = "Mouse R"; break;
-        case VK_MBUTTON:  fixed = "Mouse M"; break;
+        case VK_LBUTTON:  fixed = "Mouse Esq."; break;
+        case VK_RBUTTON:  fixed = "Mouse Dir."; break;
+        case VK_MBUTTON:  fixed = "Mouse Meio"; break;
         case VK_XBUTTON1: fixed = "Mouse 4"; break;
         case VK_XBUTTON2: fixed = "Mouse 5"; break;
         case VK_TAB:      fixed = "Tab"; break;
         case VK_CAPITAL:  fixed = "CapsLock"; break;
-        case VK_SPACE:    fixed = "Space"; break;
+        case VK_SPACE:    fixed = "Espaço"; break;
         case VK_INSERT:   fixed = "Insert"; break;
         case VK_HOME:     fixed = "Home"; break;
         case VK_END:      fixed = "End"; break;
-        case VK_PRIOR:    fixed = "PgUp"; break;
-        case VK_NEXT:     fixed = "PgDn"; break;
+        case VK_PRIOR:    fixed = "PageUp"; break;
+        case VK_NEXT:     fixed = "PageDn"; break;
         case VK_OEM_3:    fixed = "`"; break;
     }
     if (fixed) { _snprintf_s(out, cap, _TRUNCATE, "%s", fixed); return; }
@@ -683,7 +683,7 @@ int L2TabBar(const char* id, const char* const* labels, int count,
 
 void DrawProximityTab(const OverlayState& st) {
     // ----- Master volume -----
-    ImGui::TextDisabled("master volume");
+    ImGui::TextDisabled("volume geral");
     ImGui::SameLine(ImGui::GetWindowWidth() - 60);
     ImGui::Text("%d%%", (int)(st.master_volume * 100));
     float vol = st.master_volume;
@@ -697,11 +697,11 @@ void DrawProximityTab(const OverlayState& st) {
 
     // ----- Toggles -----
     bool focus = st.require_focus;
-    if (ImGui::Checkbox("require window focus", &focus)) {
+    if (ImGui::Checkbox("requer foco no jogo", &focus)) {
         SetRequireFocus(focus);
     }
     bool on = st.always_on;
-    if (ImGui::Checkbox("always on (no PTT)", &on)) {
+    if (ImGui::Checkbox("sempre ativo (sem PTT)", &on)) {
         SetAlwaysOn(on);
     }
 
@@ -711,24 +711,24 @@ void DrawProximityTab(const OverlayState& st) {
     // re-asserts proximity.
     int activeTx = GetActiveTxChannel();
     bool txHere = (activeTx == 0);
-    if (ImGui::Checkbox("transmit here (PTT)", &txHere)) {
+    if (ImGui::Checkbox("transmitir aqui (PTT)", &txHere)) {
         SetActiveTxChannel(0);
     }
     if (txHere) {
         ImGui::SameLine();
-        ImGui::TextColored(ImVec4(0.45f, 0.85f, 0.45f, 1.0f), "active");
+        ImGui::TextColored(ImVec4(0.45f, 0.85f, 0.45f, 1.0f), "ativo");
     }
 
     ImGui::Spacing();
 
     // ----- PTT -----
-    ImGui::TextUnformatted("push-to-talk");
+    ImGui::TextUnformatted("pressionar para falar (PTT)");
     ImGui::SameLine();
     bool capturing = g_captureNextKey.load() && g_captureNextSlot.load() == 0;
     if (capturing) {
         ImGui::PushStyleColor(ImGuiCol_Text,
             ImVec4(255/255.f, 178/255.f, 51/255.f, 1.0f));
-        ImGui::TextUnformatted("press a key");
+        ImGui::TextUnformatted("pressione uma tecla");
         ImGui::PopStyleColor();
     } else {
         char vkLabel[32];
@@ -736,7 +736,7 @@ void DrawProximityTab(const OverlayState& st) {
         ImGui::SameLine(ImGui::GetWindowWidth() - 120);
         Chip(vkLabel);
         ImGui::SameLine();
-        if (ImGui::SmallButton("rebind")) {
+        if (ImGui::SmallButton("redefinir")) {
             g_captureNextSlot.store(0);
             g_captureNextKey.store(true);
         }
@@ -746,9 +746,9 @@ void DrawProximityTab(const OverlayState& st) {
     ImGui::Separator();
 
     // ----- Speakers + mute-all -----
-    ImGui::TextDisabled("speakers");
+    ImGui::TextDisabled("jogadores próximos");
     ImGui::SameLine();
-    ImGui::TextDisabled("(%d active)", st.active_speakers);
+    ImGui::TextDisabled("(%d ativos)", st.active_speakers);
     ImGui::SameLine(ImGui::GetWindowWidth() - 90);
     SpeakerInfo infos[64];
     size_t n = 0;
@@ -757,7 +757,7 @@ void DrawProximityTab(const OverlayState& st) {
     // between "mute all" and "unmute all".
     bool anyUnmuted = false;
     for (size_t i = 0; i < n; ++i) if (!infos[i].muted) { anyUnmuted = true; break; }
-    if (ImGui::SmallButton(anyUnmuted ? "mute all" : "unmute all")) {
+    if (ImGui::SmallButton(anyUnmuted ? "mutar todos" : "desmutar todos")) {
         for (size_t i = 0; i < n; ++i) {
             SetSpeakerMuted(infos[i].src_id, anyUnmuted);
         }
@@ -766,7 +766,7 @@ void DrawProximityTab(const OverlayState& st) {
     ImGui::BeginChild("##speakers", ImVec2(0, 120), false,
         ImGuiWindowFlags_HorizontalScrollbar);
     if (n == 0) {
-        ImGui::TextDisabled("  (no one nearby)");
+        ImGui::TextDisabled("  (ninguém por perto)");
     }
     for (size_t i = 0; i < n; ++i) {
         ImGui::PushID((int)infos[i].src_id);
@@ -883,9 +883,9 @@ void DrawMemberRow(const OverlayMember& m, const char* extra_glyph,
         }
         if (ImGui::IsItemHovered()) {
             ImGui::SetTooltip(m.remote_muted
-                ? "Remote-muted (click to unmute)"
-                : "Remote mute on %s",
-                (channelId == 2) ? "clan" : "ally");
+                ? "Mutado remotamente (clique para desmutar)"
+                : "Silenciamento remoto em %s",
+                (channelId == 2) ? "clã" : "aliança");
         }
         ImGui::PopStyleColor(3);
         ImGui::SameLine();
@@ -916,25 +916,25 @@ void DrawGroupTab(const OverlayState& st, int channelId, const char* label) {
     int prefSlot = (channelId == 4) ? 2 : channelId;
 
     bool enabled = st.ch_enabled[prefSlot];
-    if (ImGui::Checkbox("hear this channel", &enabled)) {
+    if (ImGui::Checkbox("ouvir este canal", &enabled)) {
         SetChannelEnabled(prefSlot, enabled);
     }
 
     // Transmit selector — radio across all tabs (mutually exclusive).
     int activeTx = GetActiveTxChannel();
     bool txHere = (activeTx == channelId);
-    if (ImGui::Checkbox("transmit here (PTT)", &txHere)) {
+    if (ImGui::Checkbox("transmitir aqui (PTT)", &txHere)) {
         // Toggle on -> set this channel as active TX; toggle off ->
         // revert to Proximity (the always-safe default).
         SetActiveTxChannel(txHere ? channelId : 0);
     }
     if (txHere) {
         ImGui::SameLine();
-        ImGui::TextColored(ImVec4(0.45f, 0.85f, 0.45f, 1.0f), "active");
+        ImGui::TextColored(ImVec4(0.45f, 0.85f, 0.45f, 1.0f), "ativo");
     }
 
     ImGui::Spacing();
-    ImGui::TextDisabled("channel volume");
+    ImGui::TextDisabled("volume do canal");
     ImGui::SameLine(ImGui::GetWindowWidth() - 60);
     ImGui::Text("%d%%", (int)(st.ch_volume[prefSlot] * 100));
     float vol = st.ch_volume[prefSlot];
@@ -957,22 +957,22 @@ void DrawGroupTab(const OverlayState& st, int channelId, const char* label) {
     else if (channelId == 3) { pttVk = GetPttAllyVk();  slot = 3; }
     if (channelId >= 1 && channelId <= 3) {
         ImGui::Spacing();
-        ImGui::TextUnformatted("push-to-talk");
+        ImGui::TextUnformatted("pressionar para falar (PTT)");
         ImGui::SameLine();
         bool capturing = g_captureNextKey.load() && g_captureNextSlot.load() == slot;
         if (capturing) {
             ImGui::PushStyleColor(ImGuiCol_Text,
                 ImVec4(255/255.f, 178/255.f, 51/255.f, 1.0f));
-            ImGui::TextUnformatted("press a key");
+            ImGui::TextUnformatted("pressione uma tecla");
             ImGui::PopStyleColor();
         } else {
             char vkLabel[32];
-            if (pttVk == 0) _snprintf_s(vkLabel, sizeof(vkLabel), _TRUNCATE, "none");
+            if (pttVk == 0) _snprintf_s(vkLabel, sizeof(vkLabel), _TRUNCATE, "nenhuma");
             else            VkToString(pttVk, vkLabel, sizeof(vkLabel));
             ImGui::SameLine(ImGui::GetWindowWidth() - 130);
             Chip(vkLabel);
             ImGui::SameLine();
-            if (ImGui::SmallButton("rebind")) {
+            if (ImGui::SmallButton("redefinir")) {
                 g_captureNextSlot.store(slot);
                 g_captureNextKey.store(true);
             }
@@ -989,13 +989,13 @@ void DrawGroupTab(const OverlayState& st, int channelId, const char* label) {
     int activeCount = 0;
     for (size_t i = 0; i < n; ++i) if (roster[i].voice_active) ++activeCount;
 
-    ImGui::TextDisabled("%s members (%d voice-active / %zu total)",
+    ImGui::TextDisabled("%s membros (%d falantes / %zu total)",
         label, activeCount, n);
 
     ImGui::BeginChild("##members", ImVec2(0, 160), false,
         ImGuiWindowFlags_HorizontalScrollbar);
     if (n == 0) {
-        ImGui::TextDisabled("  (waiting for server roster — auth + L2J events)");
+        ImGui::TextDisabled("  (aguardando lista do servidor — auth + eventos L2J)");
     }
 
     // Two passes: first leaders/sub-leaders / CC speakers, then plain
@@ -1036,7 +1036,7 @@ void DrawComingSoon(const char* channelName) {
     ImGui::Spacing();
     ImGui::PushStyleColor(ImGuiCol_Text,
         ImVec4(139/255.f, 146/255.f, 163/255.f, 1.0f));
-    ImGui::TextWrapped("%s not yet implemented.", channelName);
+    ImGui::TextWrapped("%s ainda não implementado.", channelName);
     ImGui::PopStyleColor();
 }
 
@@ -1272,10 +1272,8 @@ void DrawModeBanner() {
         ImVec2 p0 = ImGui::GetWindowPos();
         ImVec2 p1 = ImVec2(p0.x + bannerW, p0.y + bannerH);
         dl->AddRectFilled(p0, p1, bg, 6.0f);
-        dl->AddRect(p0, p1, IM_COL32(255, 255, 255, 220), 6.0f, 0, 1.5f);
-
         char text[64];
-        _snprintf_s(text, sizeof(text), _TRUNCATE, "CLAN MODE: %s", modeName);
+        _snprintf_s(text, sizeof(text), _TRUNCATE, "MODO DO CLÃ: %s", modeName);
         ImVec2 ts = ImGui::CalcTextSize(text);
         ImVec2 tp(p0.x + (bannerW - ts.x) * 0.5f,
                   p0.y + (bannerH - ts.y) * 0.5f);
@@ -1377,13 +1375,12 @@ void DrawMinimizedSpeakerList() {
         if (muted)         nameCol = ImVec4(0.55f, 0.55f, 0.55f, 1.0f);
         else if (speaking) nameCol = ImVec4(0.45f, 0.85f, 0.45f, 1.0f);
         else               nameCol = ImVec4(0.85f, 0.85f, 0.85f, 1.0f);
-
         ImGui::PushStyleColor(ImGuiCol_Text, nameCol);
         ImGui::PushStyleColor(ImGuiCol_HeaderHovered,
             ImVec4(0xd4/255.f, 0xaf/255.f, 0x37/255.f, 0.25f));
         ImGui::PushStyleColor(ImGuiCol_HeaderActive,
             ImVec4(0xd4/255.f, 0xaf/255.f, 0x37/255.f, 0.40f));
-        const char* label = (haveName && name[0]) ? name : "speaker";
+        const char* label = (haveName && name[0]) ? name : "jogador";
         if (ImGui::Selectable(label, false, ImGuiSelectableFlags_None,
                 ImVec2(220.0f - iconSz - 16.0f, 0))) {
             SetSpeakerMuted(sp.src_id, !muted);
@@ -1449,7 +1446,7 @@ void DrawPanel() {
     char titleBuf[64];
     _snprintf_s(titleBuf, sizeof(titleBuf), _TRUNCATE,
         "l2voice  %s###l2voice_window",
-        st.ws_connected ? "[connected]" : "[offline]");
+        st.ws_connected ? "[conectado]" : "[offline]");
     ImGuiWindowFlags wflags = ImGuiWindowFlags_NoCollapse
                             | ImGuiWindowFlags_NoResize;
     if (!ImGui::Begin(titleBuf, nullptr, wflags)) {
@@ -1505,11 +1502,11 @@ void DrawPanel() {
 
     char sidLabel[24];
     _snprintf_s(sidLabel, sizeof(sidLabel), _TRUNCATE, "sid %u", st.session_id);
-    ImGui::TextDisabled("session");
+    ImGui::TextDisabled("sessão");
     ImGui::SameLine(chipX);
     Chip(sidLabel);
 
-    ImGui::TextDisabled("player");
+    ImGui::TextDisabled("jogador");
     ImGui::SameLine(chipX);
     char myName[48];
     bool haveMyName = GetSpeakerName(st.session_id, myName, sizeof(myName));
@@ -1527,7 +1524,7 @@ void DrawPanel() {
     // Always visible near the top so the user knows which channel
     // they're about to broadcast to when they hit PTT.
     {
-        static const char* kChanNames[] = {"Proximity", "Party", "Clan", "Ally", "CC"};
+        static const char* kChanNames[] = {"Proximidade", "Party", "Clã", "Aliança", "CC"};
         int tx = GetActiveTxChannel();
         if (tx < 0 || tx > 4) tx = 0;
         ImGui::TextDisabled("TX:");
@@ -1549,14 +1546,14 @@ void DrawPanel() {
         if (role >= 1 && cm != 0 && (tx == 2 || tx == 3)) {
             ImGui::SameLine();
             ImGui::TextColored(ImVec4(1.0f, 0.85f, 0.30f, 1.0f),
-                "(unified mode)");
+                "(modo unificado)");
         }
     }
     ImGui::Separator();
 
     // ====== Tabs ======
     if (ImGui::BeginTabBar("##chs")) {
-        if (ImGui::BeginTabItem("Proximity")) {
+        if (ImGui::BeginTabItem("Proximidade")) {
             DrawProximityTab(st);
             ImGui::EndTabItem();
         }
@@ -1564,12 +1561,12 @@ void DrawPanel() {
             DrawGroupTab(st, 1, "Party");
             ImGui::EndTabItem();
         }
-        if (ImGui::BeginTabItem("Clan")) {
-            DrawGroupTab(st, 2, "Clan");
+        if (ImGui::BeginTabItem("Clã")) {
+            DrawGroupTab(st, 2, "Clã");
             ImGui::EndTabItem();
         }
-        if (ImGui::BeginTabItem("Ally")) {
-            DrawGroupTab(st, 3, "Ally");
+        if (ImGui::BeginTabItem("Aliança")) {
+            DrawGroupTab(st, 3, "Aliança");
             ImGui::EndTabItem();
         }
         // CC tab only shown when the server says we're in a command
@@ -1577,24 +1574,24 @@ void DrawPanel() {
         // se existir um comando channel."
         if (GetCCID() != 0) {
             if (ImGui::BeginTabItem("CC")) {
-                DrawGroupTab(st, 4, "Command Channel");
+                DrawGroupTab(st, 4, "CC");
                 ImGui::Spacing();
                 ImGui::Separator();
-                ImGui::TextDisabled("Speak permission");
+                ImGui::TextDisabled("Permissão de fala");
                 if (!GetCCCanSpeak()) {
                     ImGui::TextColored(
                         ImVec4(0.85f, 0.55f, 0.20f, 1.0f),
-                        "  Speak LOCKED — the CC leader hasn't granted you.");
+                        "  Fala BLOQUEADA — o líder do CC não te concedeu permissão.");
                 } else {
                     ImGui::TextColored(
                         ImVec4(0.45f, 0.85f, 0.45f, 1.0f),
-                        "  Speak unlocked.");
+                        "  Fala liberada.");
                 }
                 // CC leader sees a grant/revoke toggle per member.
                 uint32_t myPid = st.player_id;
                 if (myPid != 0 && myPid == GetCCLeaderID()) {
                     ImGui::Spacing();
-                    ImGui::TextDisabled("Leader controls");
+                    ImGui::TextDisabled("Controles de Líder");
                     OverlayMember roster[64]; size_t n = GetGroupRoster(4, roster, 64);
                     ImGui::BeginChild("##cc_grant", ImVec2(0, 100), true);
                     for (size_t i = 0; i < n; ++i) {
@@ -1622,9 +1619,9 @@ void DrawPanel() {
     // ---- Leader panel for Clan (inline at bottom of the main panel) ----
     if (GetLocalRole() >= 1 /*sub-leader or leader*/) {
         ImGui::Separator();
-        ImGui::TextDisabled("Clan leader controls");
+        ImGui::TextDisabled("Controles do Líder do Clã");
         static const char* modeNames[] = {
-            "None", "PVP", "Siege", "Boss", "Farm",
+            "Nenhum", "PVP", "Siege", "Boss", "Farm",
         };
         int currentMode = SnapshotOverlayState().ws_connected
             ? (int)(uint8_t)0 // mode comes from VoiceNetwork::LocalClanMode below
@@ -1644,7 +1641,7 @@ void DrawPanel() {
     }
 
     ImGui::Separator();
-    ImGui::TextDisabled("Insert hides");
+    ImGui::TextDisabled("Tecla Insert oculta");
     ImGui::End();
 }
 
