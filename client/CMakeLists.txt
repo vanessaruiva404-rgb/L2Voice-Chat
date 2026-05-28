@@ -11,7 +11,13 @@
 
 cmake_minimum_required(VERSION 3.20)
 
+# Link C++ Runtime statically (/MT in Release, /MTd in Debug) so players don't
+# need the Microsoft Visual C++ Redistributable installed.
+# FORCE cache override so it overwrites any pre-existing CMakeCache.txt variables.
+set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>" CACHE STRING "Force static C++ runtime linking" FORCE)
+
 project(l2voice LANGUAGES CXX)
+
 
 # Force static runtime linking (/MT in Release, /MTd in Debug) across all compiler flags.
 # This is the most bulletproof way in CMake to guarantee /MT globally, even if fetched
