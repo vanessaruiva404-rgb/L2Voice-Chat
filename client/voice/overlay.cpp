@@ -44,6 +44,44 @@
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(
     HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
 
+void Logf(const char* fmt, ...) {
+    char buf[512];
+    va_list ap; va_start(ap, fmt);
+    _vsnprintf_s(buf, sizeof(buf), _TRUNCATE, fmt, ap);
+    va_end(ap);
+    OutputDebugStringA(buf);
+
+    // Primary: try next to the DLL (e.g. system\l2voice_PID.log)
+    // Each process writes its OWN file so dual-box logs don't mix.
+    bool written = false;
+    wchar_t logPath[MAX_PATH] = {};
+    if (GetModuleFileNameW(GetModuleHandleW(L"l2voice.dll"), logPath, MAX_PATH)) {
+        wchar_t* lastSlash = wcsrchr(logPath, L'\\');
+        if (lastSlash) {
+            *lastSlash = L'\0';
+        }
+        wchar_t pidSuffix[32];
+        _snwprintf_s(pidSuffix, _TRUNCATE, L"\\l2voice_%lu.log", GetCurrentProcessId());
+        wcscat_s(logPath, MAX_PATH, pidSuffix);
+        FILE* f = nullptr;
+        if (_wfopen_s(&f, logPath, L"a") == 0 && f) {
+            fprintf(f, "[PID:%lu] %s", GetCurrentProcessId(), buf);
+            fclose(f);
+            written = true;
+        }
+    }
+    // Fallback: C:\l2voice_PID.log (always writable)
+    if (!written) {
+        wchar_t fallback[64];
+        _snwprintf_s(fallback, _TRUNCATE, L"C:\\l2voice_%lu.log", GetCurrentProcessId());
+        FILE* f = nullptr;
+        if (_wfopen_s(&f, fallback, L"a") == 0 && f) {
+            fprintf(f, "[PID:%lu] %s", GetCurrentProcessId(), buf);
+            fclose(f);
+        }
+    }
+}
+
 namespace voice {
 
 namespace {
@@ -97,9 +135,7 @@ std::atomic<bool> g_captureNextKey{false};
 // the WndProc capture handler.
 std::atomic<int>  g_captureNextSlot{0};
 
-// Forward-declared so the DI hooks below (which sit above the Helpers
-// section) can call into the same logger as everything else.
-void Logf(const char* fmt, ...);
+// Logf is declared globally in overlay.h and resolved externally.
 
 // GetAsyncKeyState hook — when ImGui's panel has the mouse focus,
 // return 0 for the mouse-button VKs so L2's polling-based input
@@ -273,44 +309,6 @@ void InstallDirectInputHook() {
 // =============================================================
 // Helpers
 // =============================================================
-
-void Logf(const char* fmt, ...) {
-    char buf[512];
-    va_list ap; va_start(ap, fmt);
-    _vsnprintf_s(buf, sizeof(buf), _TRUNCATE, fmt, ap);
-    va_end(ap);
-    OutputDebugStringA(buf);
-
-    // Primary: try next to the DLL (e.g. system\l2voice_PID.log)
-    // Each process writes its OWN file so dual-box logs don't mix.
-    bool written = false;
-    wchar_t logPath[MAX_PATH] = {};
-    if (GetModuleFileNameW(GetModuleHandleW(L"l2voice.dll"), logPath, MAX_PATH)) {
-        wchar_t* lastSlash = wcsrchr(logPath, L'\\');
-        if (lastSlash) {
-            *lastSlash = L'\0';
-        }
-        wchar_t pidSuffix[32];
-        _snwprintf_s(pidSuffix, _TRUNCATE, L"\\l2voice_%lu.log", GetCurrentProcessId());
-        wcscat_s(logPath, MAX_PATH, pidSuffix);
-        FILE* f = nullptr;
-        if (_wfopen_s(&f, logPath, L"a") == 0 && f) {
-            fprintf(f, "[PID:%lu] %s", GetCurrentProcessId(), buf);
-            fclose(f);
-            written = true;
-        }
-    }
-    // Fallback: C:\l2voice_PID.log (always writable)
-    if (!written) {
-        wchar_t fallback[64];
-        _snwprintf_s(fallback, _TRUNCATE, L"C:\\l2voice_%lu.log", GetCurrentProcessId());
-        FILE* f = nullptr;
-        if (_wfopen_s(&f, fallback, L"a") == 0 && f) {
-            fprintf(f, "[PID:%lu] %s", GetCurrentProcessId(), buf);
-            fclose(f);
-        }
-    }
-}
 
 // Decodes PNG bytes (in memory) via stb_image, OPTIONALLY pre-tints
 // all non-transparent pixels to a solid color, then uploads to a
