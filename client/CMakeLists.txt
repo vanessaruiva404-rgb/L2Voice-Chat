@@ -11,16 +11,27 @@
 
 cmake_minimum_required(VERSION 3.20)
 
-# Link C++ Runtime statically (/MT in Release, /MTd in Debug) so players don't
-# need the Microsoft Visual C++ Redistributable installed.
-# MUST be set before the project() command to apply to all Fetched dependencies.
-set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
-
 project(l2voice LANGUAGES CXX)
+
+# Force static runtime linking (/MT in Release, /MTd in Debug) across all compiler flags.
+# This is the most bulletproof way in CMake to guarantee /MT globally, even if fetched
+# subprojects (like opus or ixwebsocket) attempt to override it or use legacy configurations.
+if(MSVC)
+    foreach(flag_var
+        CMAKE_CXX_FLAGS CMAKE_CXX_FLAGS_DEBUG CMAKE_CXX_FLAGS_RELEASE
+        CMAKE_CXX_FLAGS_MINSIZEREL CMAKE_CXX_FLAGS_RELWITHDEBINFO
+        CMAKE_C_FLAGS CMAKE_C_FLAGS_DEBUG CMAKE_C_FLAGS_RELEASE
+        CMAKE_C_FLAGS_MINSIZEREL CMAKE_C_FLAGS_RELWITHDEBINFO)
+        if(${flag_var} MATCHES "/MD")
+            string(REGEX REPLACE "/MD" "/MT" ${flag_var} "${${flag_var}}")
+        endif()
+    endforeach()
+endif()
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
+
 
 
 # L2 client is 32-bit. Refuse to configure as 64-bit so the user can't
