@@ -1824,6 +1824,8 @@ HRESULT WINAPI HookEndScene(IDirect3DDevice9* dev) {
                 ImGui::SetCurrentContext(g_imguiCtx);
                 if (g_imguiBackendInit.load()) {
                     ImGui_ImplDX9_Shutdown();
+                } else if (g_targetHwnd) {
+                    ImGui_ImplWin32_Init(g_targetHwnd);
                 }
                 ImGui_ImplDX9_Init(dev);
                 ImGui_ImplDX9_CreateDeviceObjects();
@@ -1973,6 +1975,9 @@ HRESULT WINAPI HookReset(IDirect3DDevice9* dev, D3DPRESENT_PARAMETERS* pp) {
 
     if (SUCCEEDED(hr) && g_imguiCtx) {
         ImGui::SetCurrentContext(g_imguiCtx);
+        if (!g_imguiBackendInit.load() && g_targetHwnd) {
+            ImGui_ImplWin32_Init(g_targetHwnd);
+        }
         ImGui_ImplDX9_Init(dev);          // reinit with same (recovered) device
         ImGui_ImplDX9_CreateDeviceObjects();
         g_imguiBackendInit.store(true);
