@@ -392,3 +392,139 @@ func routeViaRouter(channel uint8, seqLo uint16, srcSID uint32, opus []byte,
 		_, _ = conn.WriteToUDP(out, recv.UDPAddr)
 	}
 }
+
+// BinarySender is a callback supplied by the control plane (WS server)
+// to let the audio router dispatch binary WebSocket frames back to players.
+// Avoids circular package dependencies (audio <-> control).
+type BinarySender func(playerID uint32, data []byte)
+
+// RouteWebSocketProximity forwards a proximity opus payload to every nearby
+// session in the same instance, stamping a per-receiver gain+pan.
+// Sends via the supplied BinarySender (WebSocket).
+func RouteWebSocketProximity(seqLo uint16, srcSID uint32, opus []byte,
+	speaker *topology.Session, state *topology.State,
+	send BinarySender, cfg Config) {
+
+	if len(opus) == 0 {
+		return
+	}
+
+	now := time.Now()
+	speakerHasPos := speaker.PositionKnown(now)
+
+	rxCount[srcSID]++
+	if rxCount[srcSID]%50 == 1 {
+		log.Printf("audio(ws): sid=%d rx=#%d speakerPos=%v",
+			srcSID, rxCount[srcSID], speakerHasPos)
+	}
+
+	// Egress buffer (header + spatial + opus). Reused per send.
+	out := make([]byte, 10+len(opus))
+	out[0] = 1                 // version
+	out[1] = chProximity       // channel
+	binary.LittleEndian.PutUint16(out[2:4], seqLo)
+	binary.LittleEndian.PutUint32(out[4:8], srcSID)
+	copy(out[10:], opus)
+
+	// Self-echo (via WebSocket).
+	if cfg.Echo {
+		out[8] = 255
+		out[9] = 0
+		send(speaker.PlayerID, out)
+	}
+
+	if !speakerHasPos {
+		return
+	}
+
+	neighbors := state.ProximityNeighbors(speaker, MaxDistance)
+	if rxCount[srcSID]%50 == 1 {
+		log.Printf("audio(ws): sid=%d neighbors=%d (max range %.0fcm)",
+			srcSID, len(neighbors), MaxDistance)
+	}
+	for _, recv := range neighbors {
+		if !recv.PositionKnown(now) {
+			continue
+		}
+		// Multibox auto-mute (WebSocket version uses ClientIP).
+		if cfg.MultiboxMute && speaker.ClientIP != "" && recv.ClientIP != "" &&
+			speaker.ClientIP == recv.ClientIP {
+			continue
+		}
+		
+		dx := speaker.X - recv.X
+		dy := speaker.Y - recv.Y
+		dz := speaker.Z - recv.Z
+		dist := float32(math.Sqrt(float64(dx*dx + dy*dy + dz*dz)))
+		gainF := float32(1.0)
+		if dist > MinDistance {
+			gainF = 1.0 - (dist-MinDistance)/(MaxDistance-MinDistance)
+		}
+		if gainF <= 0 {
+			continue
+		}
+		panF := dx / PanHalfWidth
+		if panF < -1 {
+			panF = -1
+		} else if panF > 1 {
+			panF = 1
+		}
+
+		out[8] = uint8(gainF*255 + 0.5)
+		out[9] = byte(int8(panF*127 + 0.5))
+		
+		send(recv.PlayerID, out)
+	}
+}
+
+// RouteWebSocketGroup dispatches a group/CC packet through the pure routing
+// function in package router and sends it over WebSocket.
+func RouteWebSocketGroup(channel uint8, seqLo uint16, srcSID uint32, opus []byte,
+	speaker *topology.Session, state *topology.State,
+	worldState *world.WorldState, send BinarySender) {
+
+	if len(opus) == 0 || speaker.PlayerID == 0 {
+		return
+	}
+	pkt := router.Packet{
+		SenderID:   speaker.PlayerID,
+		Channel:    world.Channel(channel),
+		InstanceID: speaker.InstanceID,
+		X:          speaker.X,
+		Y:          speaker.Y,
+		Z:          speaker.Z,
+	}
+	decisions := router.Route(pkt, worldState, router.DefaultConfig())
+	if rxCount[srcSID]%50 == 1 {
+		log.Printf("audio(ws): sid=%d (pid=%d) ch=%d -> %d recipients via router",
+			srcSID, speaker.PlayerID, channel, len(decisions))
+	}
+	if len(decisions) == 0 {
+		return
+	}
+
+	out := make([]byte, 10+len(opus))
+	out[0] = 1
+	binary.LittleEndian.PutUint16(out[2:4], seqLo)
+	binary.LittleEndian.PutUint32(out[4:8], srcSID)
+	out[9] = 0 // pan centered for group voice
+	copy(out[10:], opus)
+
+	for _, d := range decisions {
+		recv := state.LookupByPlayer(d.RecipientID)
+		if recv == nil {
+			continue
+		}
+		// Quantize router volume (0..2) to wire gain byte (0..255).
+		g := d.Volume * 128.0
+		if g > 255 {
+			g = 255
+		} else if g < 0 {
+			g = 0
+		}
+		out[1] = byte(d.EgressChan)
+		out[8] = byte(g)
+		
+		send(recv.PlayerID, out)
+	}
+}
