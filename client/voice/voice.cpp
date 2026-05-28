@@ -82,6 +82,8 @@ struct Mod {
 
 Mod g_mod;
 
+uint32_t GetPlayerIdByName(const char* name);
+
 // True iff a window owned by THIS process currently has keyboard focus.
 // Used to gate microphone capture so holding the PTT key while the L2
 // window is minimized / Alt-Tab'd doesn't transmit anything.
