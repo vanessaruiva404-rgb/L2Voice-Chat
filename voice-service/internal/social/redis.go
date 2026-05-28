@@ -373,6 +373,26 @@ func handleEvent(raw []byte, state *topology.State, w *world.WorldState,
 		if sess != nil {
 			state.Drop(sess.ID)
 		}
+		if p := w.Player(ev.PlayerID); p != nil {
+			for _, id := range w.PartyMembers(ev.PlayerID) {
+				affected[id] = struct{}{}
+			}
+			if p.ClanID != 0 {
+				for _, id := range w.ClanMembers(p.ClanID) {
+					affected[id] = struct{}{}
+				}
+			}
+			if p.AllyID != 0 {
+				for _, id := range w.AllyMembers(p.AllyID) {
+					affected[id] = struct{}{}
+				}
+			}
+			if cc := w.CommandChannel(ev.PlayerID); cc != nil {
+				for _, id := range cc.MemberIDs {
+					affected[id] = struct{}{}
+				}
+			}
+		}
 		w.RemovePlayer(ev.PlayerID)
 		// Force-close any open WS for this player. Without this, the
 		// DLL stays connected with a now-invalid session and the
