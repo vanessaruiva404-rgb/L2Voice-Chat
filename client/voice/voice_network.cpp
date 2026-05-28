@@ -579,24 +579,29 @@ void VoiceNetwork::Impl::HandleNotification(const std::string& s) {
             q += "}";
             ws.send(q);
         }
+        int lang = GetLanguagePref();
         char buf[192];
-        const char* scopeName = "canal";
-        if (scope == "clan") scopeName = "clã";
-        else if (scope == "ally") scopeName = "aliança";
+        const char* scopeName = (lang == 0) ? "canal" : "channel";
+        if (scope == "clan") {
+            scopeName = (lang == 0) ? "clã" : "clan";
+        } else if (scope == "ally") {
+            scopeName = (lang == 0) ? "aliança" : "ally";
+        }
         
         if (muted) {
             _snprintf_s(buf, _TRUNCATE,
-                "Você foi mutado no %s por %s",
+                (lang == 0) ? "Você foi mutado no %s por %s" : "You were muted on %s by %s",
                 scopeName, muterName);
         } else {
             _snprintf_s(buf, _TRUNCATE,
-                "%s desmutou você no %s",
+                (lang == 0) ? "%s desmutou você no %s" : "%s unmuted you on %s",
                 muterName, scopeName);
         }
         // Mute = error/warn, unmute = success.
         AddToast(buf, muted ? 2 : 3, 6000 /*ms*/);
     } else {
-        AddToast(("notificação: " + subtype).c_str(), 0, 4000);
+        int lang = GetLanguagePref();
+        AddToast(((lang == 0 ? "notificação: " : "notification: ") + subtype).c_str(), 0, 4000);
     }
 }
 
