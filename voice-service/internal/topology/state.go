@@ -20,6 +20,7 @@ type Session struct {
 	InstanceID uint32       // 0 = main world
 	PosTime    time.Time    // when X/Y/Z was last updated by L2J event
 	LastSeen   time.Time    // last UDP/WS activity
+	ClientIP   string       // client public IP address (from WS connection, for multibox-mute on WebSocket)
 }
 
 // PositionKnown reports whether we ever received a position for this
