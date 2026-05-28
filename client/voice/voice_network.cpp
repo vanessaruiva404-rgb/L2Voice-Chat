@@ -36,13 +36,17 @@ namespace voice {
 
 namespace {
 
-std::string MakeAuthJson(const std::vector<uint16_t>& ports) {
+std::string MakeAuthJson(const std::vector<uint16_t>& ports, const std::string& char_name) {
     std::string s = "{\"type\":\"auth\",\"ports\":[";
     for (size_t i = 0; i < ports.size(); ++i) {
         if (i) s += ',';
         s += std::to_string(ports[i]);
     }
-    s += "]}";
+    s += "]";
+    if (!char_name.empty()) {
+        s += ",\"char_name\":\"" + char_name + "\"";
+    }
+    s += "}";
     return s;
 }
 
@@ -115,6 +119,7 @@ struct VoiceNetwork::Impl {
     std::string ws_url;
     std::mutex auth_mu;
     std::vector<uint16_t> client_ports;
+    std::string char_name;
 
     std::atomic<uint32_t> session_id{0};
     std::atomic<uint32_t> player_id_resolved{0};
@@ -272,7 +277,7 @@ struct VoiceNetwork::Impl {
             "[l2voice] TrySendAuth: sending %zu candidate ports: [%s]\n",
             client_ports.size(), ports_str.c_str());
         OutputDebugStringA(dbg);
-        ws.send(MakeAuthJson(client_ports));
+        ws.send(MakeAuthJson(client_ports, char_name));
         auth_sent.store(true);
     }
 
@@ -421,10 +426,15 @@ void VoiceNetwork::Stop() {
     WSACleanup();
 }
 
-void VoiceNetwork::SetClientPorts(const uint16_t* ports, size_t count) {
+void VoiceNetwork::SetClientPorts(const uint16_t* ports, size_t count, const char* char_name) {
     bool changed = false;
     {
         std::lock_guard<std::mutex> lk(impl_->auth_mu);
+        std::string new_char_name = char_name ? char_name : "";
+        if (impl_->char_name != new_char_name) {
+            impl_->char_name = new_char_name;
+            changed = true;
+        }
         if (impl_->client_ports.size() != count) {
             changed = true;
         } else {
