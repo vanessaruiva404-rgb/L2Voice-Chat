@@ -739,7 +739,7 @@ void DrawProximityTab(const OverlayState& st) {
         ImGui::SameLine(ImGui::GetWindowWidth() - 120);
         Chip(vkLabel);
         ImGui::SameLine();
-        if (ImGui::SmallButton(lang == 0 ? "redefinir" : "rebind")) {
+        if (ImGui::SmallButton(lang == 0 ? "alterar" : "rebind")) {
             g_captureNextSlot.store(0);
             g_captureNextKey.store(true);
         }
@@ -977,7 +977,7 @@ void DrawGroupTab(const OverlayState& st, int channelId, const char* label) {
             ImGui::SameLine(ImGui::GetWindowWidth() - 130);
             Chip(vkLabel);
             ImGui::SameLine();
-            if (ImGui::SmallButton(lang == 0 ? "redefinir" : "rebind")) {
+            if (ImGui::SmallButton(lang == 0 ? "alterar" : "rebind")) {
                 g_captureNextSlot.store(slot);
                 g_captureNextKey.store(true);
             }
