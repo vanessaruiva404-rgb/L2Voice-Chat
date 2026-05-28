@@ -1755,6 +1755,8 @@ void ReloadEmbeddedTextures(IDirect3DDevice9* dev) {
     TexRelease(g_l2TabUnselectedOver);
     TexRelease(g_l2WndBg);
 
+    if (!dev) return;
+
     // Reload from embedded DLL resources.
     g_micTexture = LoadEmbeddedMicTexture(dev, g_micW, g_micH, /*tintRgb*/ 0xFFFFFF);
     if (g_micTexture) {
@@ -1796,8 +1798,18 @@ void ReloadEmbeddedTextures(IDirect3DDevice9* dev) {
 // =============================================================
 
 HRESULT WINAPI HookEndScene(IDirect3DDevice9* dev) {
-    // Skip rendering entirely if the D3D9 device is lost or resetting.
+    // Skip rendering and release D3D9 resources if the device is lost or resetting.
     if (dev->TestCooperativeLevel() != D3D_OK) {
+        if (g_imguiCtx && g_imguiBackendInit.load()) {
+            Logf("[l2voice] EndScene: Device lost or lost focus, releasing all D3D9 resources and shutting down DX9/Win32 backends.\n");
+            ImGui::SetCurrentContext(g_imguiCtx);
+            ImGui_ImplDX9_Shutdown();
+            ImGui_ImplWin32_Shutdown();
+            g_imguiBackendInit.store(false);
+
+            // Release all custom textures to prevent holding COM references to the lost/dead device
+            ReloadEmbeddedTextures(nullptr);
+        }
         return g_origEndScene(dev);
     }
 
@@ -1983,6 +1995,8 @@ HRESULT WINAPI HookReset(IDirect3DDevice9* dev, D3DPRESENT_PARAMETERS* pp) {
             g_imguiBackendInit.store(false);
             Logf("[l2voice] HookReset: Reset failed, shut down Win32 backend\n");
         }
+        // Release all custom textures to prevent holding COM references to the dead device
+        ReloadEmbeddedTextures(nullptr);
     }
     return hr;
 }
