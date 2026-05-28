@@ -579,22 +579,24 @@ void VoiceNetwork::Impl::HandleNotification(const std::string& s) {
             q += "}";
             ws.send(q);
         }
-
         char buf[192];
+        const char* scopeName = "canal";
+        if (scope == "clan") scopeName = "clã";
+        else if (scope == "ally") scopeName = "aliança";
+        
         if (muted) {
             _snprintf_s(buf, _TRUNCATE,
-                "You were muted on %s by %s",
-                scope.empty() ? "clan" : scope.c_str(), muterName);
+                "Você foi mutado no %s por %s",
+                scopeName, muterName);
         } else {
             _snprintf_s(buf, _TRUNCATE,
-                "%s unmuted you on %s",
-                muterName, scope.empty() ? "clan" : scope.c_str());
+                "%s desmutou você no %s",
+                muterName, scopeName);
         }
         // Mute = error/warn, unmute = success.
         AddToast(buf, muted ? 2 : 3, 6000 /*ms*/);
     } else {
-        // Forward-compat: unknown subtype gets a generic info toast.
-        AddToast(("notification: " + subtype).c_str(), 0, 4000);
+        AddToast(("notificação: " + subtype).c_str(), 0, 4000);
     }
 }
 
