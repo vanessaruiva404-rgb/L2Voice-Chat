@@ -228,6 +228,13 @@ struct VoiceNetwork::Impl {
                     session_id.store(0);
                     player_id_resolved.store(0);
                     udp_port.store(0);
+                    {
+                        std::lock_guard<std::mutex> lk(names_mu);
+                        name_cache.clear();
+                        name_query_inflight.clear();
+                        player_name_cache.clear();
+                        player_name_inflight.clear();
+                    }
                     break;
                 case ix::WebSocketMessageType::Message:
                     if (msg->binary) {
