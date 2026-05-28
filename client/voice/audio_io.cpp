@@ -69,7 +69,7 @@ struct Source {
     float    pan    = 0.0f;       // -1..+1
     float    volume = 1.0f;       // per-source slider, 0..2
     bool     muted  = false;
-    std::chrono::steady_clock::time_point last_mix{};
+    std::chrono::steady_clock::time_point last_mix = std::chrono::steady_clock::now();
 };
 
 }  // namespace
@@ -252,6 +252,7 @@ void AudioPlayback::Enqueue(uint32_t src_id,
     src.pan  = pan;
     if (mono_pcm && samples > 0) {
         src.ring.Push(mono_pcm, samples);
+        src.last_mix = std::chrono::steady_clock::now();
     }
 }
 
@@ -276,16 +277,28 @@ void AudioPlayback::GetSpeakerInfos(SpeakerInfo* out, size_t cap, size_t& count)
     auto now = std::chrono::steady_clock::now();
     count = 0;
     std::lock_guard<std::mutex> lk(impl_->sources_mu);
-    for (auto& [id, src] : impl_->sources) {
-        if (count >= cap) break;
+    for (auto it = impl_->sources.begin(); it != impl_->sources.end(); ) {
         auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-                      now - src.last_mix).count();
-        out[count].src_id       = id;
-        out[count].gain         = src.gain;
-        out[count].volume       = src.volume;
-        out[count].muted        = src.muted;
-        out[count].ms_since_mix = (int)ms;
-        ++count;
+                      now - it->second.last_mix).count();
+        
+        // Clean up silent / disconnected sources:
+        // - After 3 seconds of silence for normal sources.
+        // - After 10 seconds of silence for muted or custom volume sources.
+        long long timeout = (it->second.muted || std::abs(it->second.volume - 1.0f) > 1e-4f) ? 10000 : 3000;
+        if (ms > timeout) {
+            it = impl_->sources.erase(it);
+            continue;
+        }
+
+        if (count < cap) {
+            out[count].src_id       = it->first;
+            out[count].gain         = it->second.gain;
+            out[count].volume       = it->second.volume;
+            out[count].muted        = it->second.muted;
+            out[count].ms_since_mix = (int)ms;
+            ++count;
+        }
+        ++it;
     }
 }
 
