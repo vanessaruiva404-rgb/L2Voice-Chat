@@ -86,6 +86,10 @@ private:
     // AGC state — current applied gain (we adjust slowly).
     float agc_gain_{1.0f};
 
+    // Pre-allocated scratch buffers to prevent stack allocation/prologue vectorization
+    int16_t aec_out_buf_[960] = {};
+    float   rnn_chunk_[480] = {};
+
     void DesignHpf(float cutoff_hz, float sample_rate);
 };
 
