@@ -1950,43 +1950,28 @@ HRESULT WINAPI HookEndScene(IDirect3DDevice9* dev) {
 }
 
 HRESULT WINAPI HookReset(IDirect3DDevice9* dev, D3DPRESENT_PARAMETERS* pp) {
-    // Device Reset fires when the D3D9 device was lost (alt-tab in exclusive-
-    // fullscreen, resolution change, second client stealing the display).
-    // We do a FULL ImGui DX9 Shutdown+Init instead of just Invalidate/Create
-    // to guarantee a clean slate — stale COM pointers from a partial reset
-    // can cause silent render failures that make the overlay disappear.
-    Logf("[l2voice] HookReset called — reinitialising ImGui DX9. backend=%d\n",
+    Logf("[l2voice] HookReset called — resetting ImGui backends. backend=%d\n",
          g_imguiBackendInit.load() ? 1 : 0);
 
     if (g_imguiCtx) {
         ImGui::SetCurrentContext(g_imguiCtx);
         if (g_imguiBackendInit.load()) {
-            ImGui_ImplDX9_Shutdown();  // full release, not just Invalidate
+            ImGui_ImplDX9_Shutdown();
+            ImGui_ImplWin32_Shutdown();
+            g_imguiBackendInit.store(false);
         }
+    }
+
+    // Restore window procedure hook before resetting device
+    if (g_targetHwnd && g_origWndProc) {
+        SetWindowLongPtrW(g_targetHwnd, GWLP_WNDPROC,
+            reinterpret_cast<LONG_PTR>(g_origWndProc));
+        g_origWndProc = nullptr;
     }
 
     HRESULT hr = g_origReset(dev, pp);
     Logf("[l2voice] HookReset: g_origReset returned 0x%08X\n", (unsigned)hr);
 
-    if (SUCCEEDED(hr) && g_imguiCtx) {
-        ImGui::SetCurrentContext(g_imguiCtx);
-        ImGui_ImplDX9_Init(dev);          // reinit with same (recovered) device
-        ImGui_ImplDX9_CreateDeviceObjects();
-        g_imguiBackendInit.store(true);
-        Logf("[l2voice] HookReset: ImGui DX9 fully reinitialized\n");
-
-        // Reinstall WndProc if AbstractEx replaced it during the reset cycle.
-        if (g_targetHwnd) {
-            WNDPROC cur = reinterpret_cast<WNDPROC>(
-                GetWindowLongPtrW(g_targetHwnd, GWLP_WNDPROC));
-            if (cur != HookedWndProc) {
-                g_origWndProc = cur;
-                SetWindowLongPtrW(g_targetHwnd, GWLP_WNDPROC,
-                    reinterpret_cast<LONG_PTR>(&HookedWndProc));
-                Logf("[l2voice] HookReset: WndProc hook reinstalled\n");
-            }
-        }
-    }
     return hr;
 }
 
