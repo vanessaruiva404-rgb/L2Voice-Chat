@@ -837,10 +837,9 @@ void DrawMemberRow(const OverlayMember& m, const char* extra_glyph,
     bool haveName = GetPlayerName(m.player_id, name, sizeof(name));
 
     // Local mute checkbox — affects only what THIS client hears.
-    bool muted = false;
+    bool muted = IsPlayerMuted(m.player_id);
     if (ImGui::Checkbox("##mute", &muted)) {
-        SetSpeakerMuted(m.player_id, true);
-        SetSpeakerVolume(m.player_id, 0.0f);
+        SetPlayerMuted(m.player_id, muted);
     }
     ImGui::SameLine();
 
@@ -897,11 +896,11 @@ void DrawMemberRow(const OverlayMember& m, const char* extra_glyph,
     }
 
     // Per-player local volume slider, far right.
-    float v = 1.0f;
+    float v = GetPlayerVolume(m.player_id);
     ImGui::PushItemWidth(sliderW);
     if (ImGui::SliderFloat("##vol", &v, 0.0f, 2.0f, "",
             ImGuiSliderFlags_NoInput)) {
-        SetSpeakerVolume(m.player_id, v);
+        SetPlayerVolume(m.player_id, v);
     }
     ImGui::PopItemWidth();
 
@@ -1531,7 +1530,7 @@ void DrawPanel() {
     // ====== TX channel indicator ======
     // Always visible near the top so the user knows which channel
     // they're about to broadcast to when they hit PTT.
-    {
+    if (st.session_id != 0) {
         static const char* kChanNamesPT[] = {"Proximidade", "Party", "Clã", "Aliança", "CC"};
         static const char* kChanNamesEN[] = {"Proximity", "Party", "Clan", "Ally", "CC"};
         int tx = GetActiveTxChannel();
@@ -1560,90 +1559,97 @@ void DrawPanel() {
     }
     ImGui::Separator();
 
-    // ====== Tabs ======
-    if (ImGui::BeginTabBar("##chs")) {
-        if (ImGui::BeginTabItem(lang == 0 ? "Proximidade" : "Proximity")) {
-            DrawProximityTab(st);
-            ImGui::EndTabItem();
-        }
-        if (ImGui::BeginTabItem("Party")) {
-            DrawGroupTab(st, 1, "Party");
-            ImGui::EndTabItem();
-        }
-        if (ImGui::BeginTabItem(lang == 0 ? "Clã" : "Clan")) {
-            DrawGroupTab(st, 2, "Clan");
-            ImGui::EndTabItem();
-        }
-        if (ImGui::BeginTabItem(lang == 0 ? "Aliança" : "Ally")) {
-            DrawGroupTab(st, 3, "Ally");
-            ImGui::EndTabItem();
-        }
-        // CC tab only shown when the server says we're in a command
-        // channel. Visibility is the spec — "a aba CC só deve aparecer
-        // se existir um comando channel."
-        if (GetCCID() != 0) {
-            if (ImGui::BeginTabItem("CC")) {
-                DrawGroupTab(st, 4, "CC");
-                ImGui::Spacing();
-                ImGui::Separator();
-                ImGui::TextDisabled(lang == 0 ? "Permissão de fala" : "Speak permission");
-                if (!GetCCCanSpeak()) {
-                    ImGui::TextColored(
-                        ImVec4(0.85f, 0.55f, 0.20f, 1.0f),
-                        lang == 0 ? "  Fala BLOQUEADA — o líder do CC não te concedeu permissão." : "  Speak LOCKED — the CC leader hasn't granted you.");
-                } else {
-                    ImGui::TextColored(
-                        ImVec4(0.45f, 0.85f, 0.45f, 1.0f),
-                        lang == 0 ? "  Fala liberada." : "  Speak unlocked.");
-                }
-                // CC leader sees a grant/revoke toggle per member.
-                uint32_t myPid = st.player_id;
-                if (myPid != 0 && myPid == GetCCLeaderID()) {
-                    ImGui::Spacing();
-                    ImGui::TextDisabled(lang == 0 ? "Controles de Líder" : "Leader controls");
-                    OverlayMember roster[64]; size_t n = GetGroupRoster(4, roster, 64);
-                    ImGui::BeginChild("##cc_grant", ImVec2(0, 100), true);
-                    for (size_t i = 0; i < n; ++i) {
-                        if (roster[i].player_id == myPid) continue;
-                        ImGui::PushID((int)roster[i].player_id);
-                        char nm[48];
-                        bool haveN = GetPlayerName(roster[i].player_id, nm, sizeof(nm));
-                        bool granted = roster[i].cc_can_speak;
-                        if (ImGui::Checkbox("##grant", &granted)) {
-                            SendCCGrantSpeak(roster[i].player_id, granted);
-                        }
-                        ImGui::SameLine();
-                        if (haveN && nm[0]) ImGui::Text("%s", nm);
-                        else                ImGui::Text("pid=%u", roster[i].player_id);
-                        ImGui::PopID();
-                    }
-                    ImGui::EndChild();
-                }
+    if (st.session_id == 0) {
+        ImGui::Spacing();
+        ImGui::TextColored(ImVec4(240/255.f, 180/255.f, 40/255.f, 1.0f),
+            lang == 0 ? "Aguardando canal de voz..." : "Waiting for voice channel...");
+        ImGui::Spacing();
+    } else {
+        // ====== Tabs ======
+        if (ImGui::BeginTabBar("##chs")) {
+            if (ImGui::BeginTabItem(lang == 0 ? "Proximidade" : "Proximity")) {
+                DrawProximityTab(st);
                 ImGui::EndTabItem();
             }
+            if (ImGui::BeginTabItem("Party")) {
+                DrawGroupTab(st, 1, "Party");
+                ImGui::EndTabItem();
+            }
+            if (ImGui::BeginTabItem(lang == 0 ? "Clã" : "Clan")) {
+                DrawGroupTab(st, 2, "Clan");
+                ImGui::EndTabItem();
+            }
+            if (ImGui::BeginTabItem(lang == 0 ? "Aliança" : "Ally")) {
+                DrawGroupTab(st, 3, "Ally");
+                ImGui::EndTabItem();
+            }
+            // CC tab only shown when the server says we're in a command
+            // channel. Visibility is the spec — "a aba CC só deve aparecer
+            // se existir um comando channel."
+            if (GetCCID() != 0) {
+                if (ImGui::BeginTabItem("CC")) {
+                    DrawGroupTab(st, 4, "CC");
+                    ImGui::Spacing();
+                    ImGui::Separator();
+                    ImGui::TextDisabled(lang == 0 ? "Permissão de fala" : "Speak permission");
+                    if (!GetCCCanSpeak()) {
+                        ImGui::TextColored(
+                            ImVec4(0.85f, 0.55f, 0.20f, 1.0f),
+                            lang == 0 ? "  Fala BLOQUEADA — o líder do CC não te concedeu permissão." : "  Speak LOCKED — the CC leader hasn't granted you.");
+                    } else {
+                        ImGui::TextColored(
+                            ImVec4(0.45f, 0.85f, 0.45f, 1.0f),
+                            lang == 0 ? "  Fala liberada." : "  Speak unlocked.");
+                    }
+                    // CC leader sees a grant/revoke toggle per member.
+                    uint32_t myPid = SnapshotOverlayState().player_id;
+                    if (myPid != 0 && myPid == GetCCLeaderID()) {
+                        ImGui::Spacing();
+                        ImGui::TextDisabled(lang == 0 ? "Controles de Líder" : "Leader controls");
+                        OverlayMember roster[64]; size_t n = GetGroupRoster(4, roster, 64);
+                        ImGui::BeginChild("##cc_grant", ImVec2(0, 100), true);
+                        for (size_t i = 0; i < n; ++i) {
+                            if (roster[i].player_id == myPid) continue;
+                            ImGui::PushID((int)roster[i].player_id);
+                            char nm[48];
+                            bool haveN = GetPlayerName(roster[i].player_id, nm, sizeof(nm));
+                            bool granted = roster[i].cc_can_speak;
+                            if (ImGui::Checkbox("##grant", &granted)) {
+                                SendCCGrantSpeak(roster[i].player_id, granted);
+                            }
+                            ImGui::SameLine();
+                            if (haveN && nm[0]) ImGui::Text("%s", nm);
+                            else                ImGui::Text("pid=%u", roster[i].player_id);
+                            ImGui::PopID();
+                        }
+                        ImGui::EndChild();
+                    }
+                    ImGui::EndTabItem();
+                }
+            }
+            ImGui::EndTabBar();
         }
-        ImGui::EndTabBar();
-    }
 
-    // ---- Leader panel for Clan (inline at bottom of the main panel) ----
-    if (GetLocalRole() >= 1 /*sub-leader or leader*/) {
-        ImGui::Separator();
-        ImGui::TextDisabled(lang == 0 ? "Controles do Líder do Clã" : "Clan leader controls");
-        static const char* modeNamesPT[] = {"Nenhum", "PVP", "Siege", "Boss", "Farm"};
-        static const char* modeNamesEN[] = {"None", "PVP", "Siege", "Boss", "Farm"};
-        int currentMode = SnapshotOverlayState().ws_connected
-            ? (int)(uint8_t)0 // mode comes from VoiceNetwork::LocalClanMode below
-            : 0;
-        // Actually read live mode (LocalClanMode is on VoiceNetwork, exposed
-        // through GetLocalRole? add a getter via GetLocalClanMode).
-        currentMode = (int)0;
-        // We don't yet expose local clan mode through a getter; show
-        // mode buttons that send-only. (Server broadcasts back the new
-        // mode via client_state -> mode banner will reflect it.)
-        for (int i = 0; i < 5; ++i) {
-            if (i > 0) ImGui::SameLine();
-            if (ImGui::SmallButton(lang == 0 ? modeNamesPT[i] : modeNamesEN[i])) {
-                SendClanSetMode((uint8_t)i);
+        // ---- Leader panel for Clan (inline at bottom of the main panel) ----
+        if (GetLocalRole() >= 1 /*sub-leader or leader*/) {
+            ImGui::Separator();
+            ImGui::TextDisabled(lang == 0 ? "Controles do Líder do Clã" : "Clan leader controls");
+            static const char* modeNamesPT[] = {"Nenhum", "PVP", "Siege", "Boss", "Farm"};
+            static const char* modeNamesEN[] = {"None", "PVP", "Siege", "Boss", "Farm"};
+            int currentMode = SnapshotOverlayState().ws_connected
+                ? (int)(uint8_t)0 // mode comes from VoiceNetwork::LocalClanMode below
+                : 0;
+            // Actually read live mode (LocalClanMode is on VoiceNetwork, exposed
+            // through GetLocalRole? add a getter via GetLocalClanMode).
+            currentMode = (int)0;
+            // We don't yet expose local clan mode through a getter; show
+            // mode buttons that send-only. (Server broadcasts back the new
+            // mode via client_state -> mode banner will reflect it.)
+            for (int i = 0; i < 5; ++i) {
+                if (i > 0) ImGui::SameLine();
+                if (ImGui::SmallButton(lang == 0 ? modeNamesPT[i] : modeNamesEN[i])) {
+                    SendClanSetMode((uint8_t)i);
+                }
             }
         }
     }
