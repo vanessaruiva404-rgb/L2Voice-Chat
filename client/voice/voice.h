@@ -108,6 +108,11 @@ float GetPlayerVolume(uint32_t player_id);
 void SetPlayerVolume(uint32_t player_id, float volume);
 void SetCharName(const char* name);
 
+bool IsPrioritizeClanLeader();
+void SetPrioritizeClanLeader(bool active);
+bool IsPrioritizePartyLeader();
+void SetPrioritizePartyLeader(bool active);
+
 // Returns true if at least one remote session is currently audible.
 // Used by the HUD to show the "X is speaking" badge.
 bool HasActiveSpeakers();
