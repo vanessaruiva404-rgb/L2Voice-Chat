@@ -296,7 +296,7 @@ Config DefaultConfig() {
     c.enabled       = true;
     c.auto_connect  = true;
     c.require_focus = true;
-    c.always_on     = false;
+    c.always_on     = true;
     c.master_volume = 1.0f;
     c.char_name[0]  = 0;
     return c;
@@ -364,7 +364,7 @@ bool LoadConfigFromIni(const wchar_t* path, Config* out) {
     c.enabled        = getI(L"enabled", 1) != 0;
     c.auto_connect   = getI(L"auto_connect", 1) != 0;
     c.require_focus  = getI(L"require_focus", 1) != 0;
-    c.always_on      = getI(L"always_on", 0) != 0;
+    c.always_on      = getI(L"always_on", 1) != 0;
     c.master_volume  = (float)getI(L"master_volume", 100) / 100.0f;
     *out = c;
     return true;
