@@ -1423,6 +1423,42 @@ void DrawMinimizedSpeakerList() {
     if (ping < 0) ImGui::TextColored(pingCol, "--");
     else          ImGui::TextColored(pingCol, "%d ms", ping);
 
+    ImGui::Separator();
+    ImGui::Spacing();
+
+    // Quick active TX channel selectors (below ping)
+    int activeTx = GetActiveTxChannel();
+    float availW = ImGui::GetContentRegionAvail().x;
+    float btnW = (availW - (3.0f * ImGui::GetStyle().ItemSpacing.x)) / 4.0f;
+
+    auto drawTxBtn = [&](const char* label, int channelId) {
+        bool active = (activeTx == channelId);
+        if (active) {
+            // Gold/golden style for active channel button
+            ImGui::PushStyleColor(ImGuiCol_Button,        IM_COL32(0xd4, 0xaf, 0x37, 0xcc));
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, IM_COL32(0xff, 0xd6, 0x60, 0xcc));
+            ImGui::PushStyleColor(ImGuiCol_ButtonActive,  IM_COL32(0xd4, 0xaf, 0x37, 0xee));
+        } else {
+            // Standard dark gray button style
+            ImGui::PushStyleColor(ImGuiCol_Button,        IM_COL32(0x2a, 0x1f, 0x15, 0xaa));
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, IM_COL32(0x3e, 0x2e, 0x20, 0xaa));
+            ImGui::PushStyleColor(ImGuiCol_ButtonActive,  IM_COL32(0x2a, 0x1f, 0x15, 0xcc));
+        }
+
+        if (ImGui::Button(label, ImVec2(btnW, 20.0f))) {
+            SetActiveTxChannel(channelId);
+        }
+        ImGui::PopStyleColor(3);
+    };
+
+    drawTxBtn(lang == 0 ? "Prox" : "Prox", 0);
+    ImGui::SameLine();
+    drawTxBtn("Party", 1);
+    ImGui::SameLine();
+    drawTxBtn(lang == 0 ? "Clan" : "Clan", 2);
+    ImGui::SameLine();
+    drawTxBtn("Ally", 3);
+
     ImGui::End();
     ImGui::PopStyleVar();
     ImGui::PopStyleColor(2);
