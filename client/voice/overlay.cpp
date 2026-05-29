@@ -1306,6 +1306,7 @@ void DrawModeBanner() {
 // Anchored once on first show, then ImGui remembers within the session.
 void DrawMinimizedSpeakerList() {
     int lang = g_language.load();
+    OverlayState st = SnapshotOverlayState();
     SpeakerInfo speakers[64];
     size_t n = 0;
     GetSpeakerList(speakers, 64, n);
@@ -1459,6 +1460,42 @@ void DrawMinimizedSpeakerList() {
     drawTxBtn(lang == 0 ? "Clan" : "Clan", 2);
     ImGui::SameLine();
     drawTxBtn("Ally", 3);
+
+    ImGui::Spacing();
+
+    // Quick hearing toggles (below quick TX buttons)
+    availW = ImGui::GetContentRegionAvail().x;
+    btnW = (availW - (2.0f * ImGui::GetStyle().ItemSpacing.x)) / 3.0f;
+
+    auto drawHearToggleBtn = [&](const char* label, int slotId) {
+        bool hearing = st.ch_enabled[slotId];
+        if (hearing) {
+            // Active/Hearing: Green/standard style
+            ImGui::PushStyleColor(ImGuiCol_Button,        IM_COL32(0x2e, 0x7d, 0x32, 0xcc)); // green
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, IM_COL32(0x38, 0x8e, 0x3c, 0xcc));
+            ImGui::PushStyleColor(ImGuiCol_ButtonActive,  IM_COL32(0x2e, 0x7d, 0x32, 0xee));
+        } else {
+            // Muted/Disabled: Red/dim style
+            ImGui::PushStyleColor(ImGuiCol_Button,        IM_COL32(0xc6, 0x28, 0x28, 0xcc)); // red
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, IM_COL32(0xd3, 0x2f, 0x2f, 0xcc));
+            ImGui::PushStyleColor(ImGuiCol_ButtonActive,  IM_COL32(0xc6, 0x28, 0x28, 0xee));
+        }
+
+        char btnLabel[32];
+        _snprintf_s(btnLabel, sizeof(btnLabel), _TRUNCATE, "%s: %s", 
+            label, hearing ? (lang == 0 ? "ON" : "ON") : (lang == 0 ? "MUT" : "MUT"));
+
+        if (ImGui::Button(btnLabel, ImVec2(btnW, 20.0f))) {
+            SetChannelEnabled(slotId, !hearing);
+        }
+        ImGui::PopStyleColor(3);
+    };
+
+    drawHearToggleBtn("Party", 1);
+    ImGui::SameLine();
+    drawHearToggleBtn(lang == 0 ? "Clã" : "Clan", 2);
+    ImGui::SameLine();
+    drawHearToggleBtn("Ally", 3);
 
     ImGui::End();
     ImGui::PopStyleVar();
