@@ -29,10 +29,22 @@
 #include <thread>
 #include <unordered_map>
 #include <vector>
+#include <string>
 
 namespace voice {
 
 namespace {
+
+static int64_t NowMillis() {
+    return std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+
+std::unordered_map<uint32_t, bool>  g_local_muted;
+std::unordered_map<uint32_t, float> g_local_volume;
+std::unordered_map<std::string, int>     g_speaker_channel;
+std::unordered_map<std::string, int64_t> g_speaker_last_time;
+std::mutex                          g_local_prefs_mu;
 
 // Per-channel listening prefs. Defaults: all enabled, all at 1.0.
 // Loaded from voice.ini on init (keys ch_enabled_N / ch_volume_N),
@@ -294,12 +306,6 @@ void OnIncomingPacket(uint8_t channel, uint32_t src, uint16_t /*seq*/,
     g_mod.playback.Enqueue(src, pcm, (uint32_t)got, gain, pan);
     Logf("[l2voice] OnIncomingPacket: Enqueue done\n");
 }
-
-std::unordered_map<uint32_t, bool>  g_local_muted;
-std::unordered_map<uint32_t, float> g_local_volume;
-std::unordered_map<std::string, int>     g_speaker_channel;
-std::unordered_map<std::string, int64_t> g_speaker_last_time;
-std::mutex                          g_local_prefs_mu;
 
 uint32_t GetPlayerIdByName(const char* name) {
     if (!name || !name[0]) return 0;
@@ -564,11 +570,6 @@ static size_t   g_last_port_count  = 0;
 static int64_t  g_out_of_world_at  = 0;  // ms timestamp when port count last dropped to 0
 static bool     g_voice_suspended  = false;
 constexpr int64_t kOutOfWorldGraceMs = 5000;
-
-static int64_t NowMillis() {
-    return std::chrono::duration_cast<std::chrono::milliseconds>(
-        std::chrono::steady_clock::now().time_since_epoch()).count();
-}
 
 void RefreshClientPorts() {
     // Exclude the WS connection itself (port 17667 by default). We
