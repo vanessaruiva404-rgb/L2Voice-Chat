@@ -1305,6 +1305,7 @@ void DrawModeBanner() {
 // position is per-session; user can drag it anywhere from the icon.
 // Anchored once on first show, then ImGui remembers within the session.
 void DrawMinimizedSpeakerList() {
+    int lang = g_language.load();
     SpeakerInfo speakers[64];
     size_t n = 0;
     GetSpeakerList(speakers, 64, n);
