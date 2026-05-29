@@ -83,6 +83,8 @@ struct Mod {
 Mod g_mod;
 
 uint32_t GetPlayerIdByName(const char* name);
+std::atomic<bool> g_prioritize_clan_leader{false};
+std::atomic<bool> g_prioritize_party_leader{false};
 
 // True iff a window owned by THIS process currently has keyboard focus.
 // Used to gate microphone capture so holding the PTT key while the L2
@@ -208,6 +210,47 @@ void OnIncomingPacket(uint8_t channel, uint32_t src, uint16_t /*seq*/,
     if (prefSlot < 4) {
         if (!g_mod.ch_prefs.enabled[prefSlot]) {
             return;
+        }
+    }
+
+    // 1. Prioritize Clan Leader filter
+    if (g_prioritize_clan_leader.load()) {
+        if (channel == 2 || channel == 3 || channel == 8) {
+            uint32_t clanLeaderId = 0;
+            OverlayMember clanRoster[64];
+            size_t clanCount = GetGroupRoster(2, clanRoster, 64);
+            for (size_t i = 0; i < clanCount; ++i) {
+                if (clanRoster[i].clan_role == 2) {
+                    clanLeaderId = clanRoster[i].player_id;
+                    break;
+                }
+            }
+            char spName[64];
+            if (GetSpeakerName(src, spName, sizeof(spName)) && spName[0]) {
+                uint32_t pid = GetPlayerIdByName(spName);
+                if (pid != clanLeaderId) {
+                    return; // Mute everyone except Clan Leader!
+                }
+            }
+        }
+    }
+
+    // 2. Prioritize Party Leader filter
+    if (g_prioritize_party_leader.load()) {
+        if (channel == 1) {
+            uint32_t partyLeaderId = 0;
+            OverlayMember partyRoster[64];
+            size_t partyCount = GetGroupRoster(1, partyRoster, 64);
+            if (partyCount > 0) {
+                partyLeaderId = partyRoster[0].player_id;
+            }
+            char spName[64];
+            if (GetSpeakerName(src, spName, sizeof(spName)) && spName[0]) {
+                uint32_t pid = GetPlayerIdByName(spName);
+                if (pid != partyLeaderId) {
+                    return; // Mute everyone except Party Leader!
+                }
+            }
         }
     }
 
@@ -815,6 +858,11 @@ void SetCharName(const char* name) {
     }
     RefreshClientPorts();
 }
+
+bool IsPrioritizeClanLeader() { return g_prioritize_clan_leader.load(); }
+void SetPrioritizeClanLeader(bool active) { g_prioritize_clan_leader.store(active); }
+bool IsPrioritizePartyLeader() { return g_prioritize_party_leader.load(); }
+void SetPrioritizePartyLeader(bool active) { g_prioritize_party_leader.store(active); }
 
 bool HasActiveSpeakers() {
     return g_mod.playback.ActiveSpeakers() > 0;
