@@ -203,10 +203,12 @@ void OnIncomingPacket(uint8_t channel, uint32_t src, uint16_t /*seq*/,
     // (1.0 → 128). Pan=0 always.
     // Channel 8 = unified-mode rewrite of CLAN/ALLY when a clan mode is
     // active. Mixed at full volume with override (ForceAudible).
-    if (!(channel == 0 ||
-          (channel >= 1 && channel <= 4) ||
-          channel == 8)) {
-        return;
+    uint8_t prefSlot = channel;
+    if (channel == 4) prefSlot = 2; // CC uses CLAN slot
+    if (prefSlot < 4) {
+        if (!g_mod.ch_prefs.enabled[prefSlot]) {
+            return;
+        }
     }
 
     VoiceOpusDecoder* dec = g_mod.DecoderFor(src);
@@ -223,6 +225,10 @@ void OnIncomingPacket(uint8_t channel, uint32_t src, uint16_t /*seq*/,
 
     float gain = (float)gain_u8 / 255.0f;
     float pan  = (float)pan_i8  / 127.0f;
+
+    if (prefSlot < 4) {
+        gain *= g_mod.ch_prefs.volume[prefSlot];
+    }
 
     char spName[64];
     if (GetSpeakerName(src, spName, sizeof(spName)) && spName[0]) {
