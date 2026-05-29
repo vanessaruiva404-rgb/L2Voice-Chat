@@ -143,6 +143,27 @@ std::atomic<int>  g_language{0}; // 0 = PT-BR, 1 = EN
 
 // Logf is declared globally in overlay.h and resolved externally.
 
+extern "C" int GetPlayerSpeakingChannel(const char* name);
+
+using GetPrivateProfileIntW_t = UINT(WINAPI*)(LPCWSTR, LPCWSTR, INT, LPCWSTR);
+GetPrivateProfileIntW_t g_origGetPrivateProfileIntW = nullptr;
+
+UINT WINAPI HookedGetPrivateProfileIntW(LPCWSTR lpAppName, LPCWSTR lpKeyName, INT nDefault, LPCWSTR lpFileName) {
+    if (lpAppName && wcscmp(lpAppName, L"VoiceSpeak") == 0) {
+        if (lpKeyName) {
+            char name[64] = {};
+            size_t dummy = 0;
+            wcstombs_s(&dummy, name, lpKeyName, _TRUNCATE);
+            int channel = GetPlayerSpeakingChannel(name);
+            return (UINT)channel;
+        }
+    }
+    if (g_origGetPrivateProfileIntW) {
+        return g_origGetPrivateProfileIntW(lpAppName, lpKeyName, nDefault, lpFileName);
+    }
+    return nDefault;
+}
+
 // GetAsyncKeyState hook — when ImGui's panel has the mouse focus,
 // return 0 for the mouse-button VKs so L2's polling-based input
 // (DirectInput-style: check GetAsyncKeyState every frame and act on
@@ -2232,6 +2253,15 @@ bool InstallOverlay() {
                 reinterpret_cast<void*>(&HookGetAsyncKeyState),
                 reinterpret_cast<void**>(&g_origGetAsyncKeyState)) != MH_OK) {
             Logf("[l2voice] overlay: GetAsyncKeyState hook install failed\n");
+        }
+    }
+    HMODULE kernel32 = GetModuleHandleA("kernel32.dll");
+    void* gppiAddr = kernel32 ? GetProcAddress(kernel32, "GetPrivateProfileIntW") : nullptr;
+    if (gppiAddr) {
+        if (MH_CreateHook(gppiAddr,
+                reinterpret_cast<void*>(&HookedGetPrivateProfileIntW),
+                reinterpret_cast<void**>(&g_origGetPrivateProfileIntW)) != MH_OK) {
+            Logf("[l2voice] overlay: GetPrivateProfileIntW hook install failed\n");
         }
     }
     if (MH_EnableHook(MH_ALL_HOOKS) != MH_OK) {
