@@ -163,10 +163,17 @@ void OnCaptureFrame(const int16_t* pcm, uint32_t samples) {
     if (!transmit) return;
     if (!g_mod.net.IsConnected()) return;
 
+    char my_name[64] = {};
     if (g_mod.cfg.char_name[0]) {
+        std::strncpy(my_name, g_mod.cfg.char_name, sizeof(my_name) - 1);
+    } else if (g_mod.net.PlayerID() != 0) {
+        GetPlayerName(g_mod.net.PlayerID(), my_name, sizeof(my_name));
+    }
+    
+    if (my_name[0]) {
         std::lock_guard<std::mutex> lk(g_local_prefs_mu);
-        g_speaker_channel[g_mod.cfg.char_name] = channel;
-        g_speaker_last_time[g_mod.cfg.char_name] = NowMillis();
+        g_speaker_channel[my_name] = channel;
+        g_speaker_last_time[my_name] = NowMillis();
     }
 
     Logf("[l2voice] OnCaptureFrame: starting transmit. channel=%u\n", (unsigned)channel);
