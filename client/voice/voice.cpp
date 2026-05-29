@@ -275,6 +275,11 @@ void OnIncomingPacket(uint8_t channel, uint32_t src, uint16_t /*seq*/,
 
     char spName[64];
     if (GetSpeakerName(src, spName, sizeof(spName)) && spName[0]) {
+        {
+            std::lock_guard<std::mutex> lk(g_local_prefs_mu);
+            g_speaker_channel[spName] = channel;
+            g_speaker_last_time[spName] = NowMillis();
+        }
         uint32_t pid = GetPlayerIdByName(spName);
         if (pid != 0) {
             if (IsPlayerMuted(pid)) {
@@ -292,6 +297,8 @@ void OnIncomingPacket(uint8_t channel, uint32_t src, uint16_t /*seq*/,
 
 std::unordered_map<uint32_t, bool>  g_local_muted;
 std::unordered_map<uint32_t, float> g_local_volume;
+std::unordered_map<std::string, int>     g_speaker_channel;
+std::unordered_map<std::string, int64_t> g_speaker_last_time;
 std::mutex                          g_local_prefs_mu;
 
 uint32_t GetPlayerIdByName(const char* name) {
@@ -868,4 +875,22 @@ bool HasActiveSpeakers() {
     return g_mod.playback.ActiveSpeakers() > 0;
 }
 
+int GetPlayerSpeakingChannelImpl(const char* name) {
+    if (!name || !name[0]) return -1;
+    std::lock_guard<std::mutex> lk(g_local_prefs_mu);
+    auto it = g_speaker_last_time.find(name);
+    if (it != g_speaker_last_time.end()) {
+        int64_t last_time = it->second;
+        if (NowMillis() - last_time < 400) {
+            auto chIt = g_speaker_channel.find(name);
+            return (chIt != g_speaker_channel.end()) ? chIt->second : -1;
+        }
+    }
+    return -1;
+}
+
 }  // namespace voice
+
+extern "C" __declspec(dllexport) int GetPlayerSpeakingChannel(const char* name) {
+    return voice::GetPlayerSpeakingChannelImpl(name);
+}
