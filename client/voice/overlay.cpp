@@ -1497,6 +1497,56 @@ void DrawMinimizedSpeakerList() {
     ImGui::SameLine();
     drawHearToggleBtn("Ally", 3);
 
+    bool showClanFocus = (GetLocalRole() == 2);
+    bool showPartyFocus = false;
+    OverlayMember partyRoster[64];
+    size_t partyCount = GetGroupRoster(1, partyRoster, 64);
+    if (partyCount > 0 && partyRoster[0].player_id == st.player_id && st.player_id != 0) {
+        showPartyFocus = true;
+    }
+
+    if (showClanFocus || showPartyFocus) {
+        ImGui::Spacing();
+        availW = ImGui::GetContentRegionAvail().x;
+
+        int visibleButtons = (showClanFocus ? 1 : 0) + (showPartyFocus ? 1 : 0);
+        float pBtnW = availW;
+        if (visibleButtons == 2) {
+            pBtnW = (availW - ImGui::GetStyle().ItemSpacing.x) / 2.0f;
+        }
+
+        auto drawPrioritizeBtn = [&](const char* label, int type, float width) {
+            bool active = (type == 0) ? IsPrioritizeClanLeader() : IsPrioritizePartyLeader();
+            if (active) {
+                // Gold/Orange alert style to signify overriding priority active
+                ImGui::PushStyleColor(ImGuiCol_Button,        IM_COL32(0xd4, 0x5d, 0x00, 0xcc)); // gold-orange
+                ImGui::PushStyleColor(ImGuiCol_ButtonHovered, IM_COL32(0xff, 0x7b, 0x1a, 0xcc));
+                ImGui::PushStyleColor(ImGuiCol_ButtonActive,  IM_COL32(0xd4, 0x5d, 0x00, 0xee));
+            } else {
+                // Standard dark gray button style
+                ImGui::PushStyleColor(ImGuiCol_Button,        IM_COL32(0x2a, 0x1f, 0x15, 0xaa));
+                ImGui::PushStyleColor(ImGuiCol_ButtonHovered, IM_COL32(0x3e, 0x2e, 0x20, 0xaa));
+                ImGui::PushStyleColor(ImGuiCol_ButtonActive,  IM_COL32(0x2a, 0x1f, 0x15, 0xcc));
+            }
+
+            if (ImGui::Button(label, ImVec2(width, 20.0f))) {
+                if (type == 0) SetPrioritizeClanLeader(!active);
+                else           SetPrioritizePartyLeader(!active);
+            }
+            ImGui::PopStyleColor(3);
+        };
+
+        bool first = true;
+        if (showClanFocus) {
+            drawPrioritizeBtn(lang == 0 ? "Focar Líder Clã" : "Focus Clan Ldr", 0, pBtnW);
+            first = false;
+        }
+        if (showPartyFocus) {
+            if (!first) ImGui::SameLine();
+            drawPrioritizeBtn(lang == 0 ? "Focar Líder Pty" : "Focus Pty Ldr", 1, pBtnW);
+        }
+    }
+
     ImGui::End();
     ImGui::PopStyleVar();
     ImGui::PopStyleColor(2);
