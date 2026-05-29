@@ -163,6 +163,12 @@ void OnCaptureFrame(const int16_t* pcm, uint32_t samples) {
     if (!transmit) return;
     if (!g_mod.net.IsConnected()) return;
 
+    if (g_mod.cfg.char_name[0]) {
+        std::lock_guard<std::mutex> lk(g_local_prefs_mu);
+        g_speaker_channel[g_mod.cfg.char_name] = channel;
+        g_speaker_last_time[g_mod.cfg.char_name] = NowMillis();
+    }
+
     Logf("[l2voice] OnCaptureFrame: starting transmit. channel=%u\n", (unsigned)channel);
 
     // APM: AEC → HPF → NS (rnnoise) → AGC. Operates in-place on a
