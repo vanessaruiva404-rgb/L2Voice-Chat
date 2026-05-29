@@ -164,6 +164,67 @@ UINT WINAPI HookedGetPrivateProfileIntW(LPCWSTR lpAppName, LPCWSTR lpKeyName, IN
     return nDefault;
 }
 
+using GetPrivateProfileStringW_t = DWORD(WINAPI*)(LPCWSTR, LPCWSTR, LPCWSTR, LPWSTR, DWORD, LPCWSTR);
+GetPrivateProfileStringW_t g_origGetPrivateProfileStringW = nullptr;
+
+DWORD WINAPI HookedGetPrivateProfileStringW(LPCWSTR lpAppName, LPCWSTR lpKeyName, LPCWSTR lpDefault, LPWSTR lpReturnedString, DWORD nSize, LPCWSTR lpFileName) {
+    if (lpAppName && wcscmp(lpAppName, L"VoiceSpeak") == 0) {
+        if (lpKeyName) {
+            char name[64] = {};
+            size_t dummy = 0;
+            wcstombs_s(&dummy, name, lpKeyName, _TRUNCATE);
+            int channel = GetPlayerSpeakingChannel(name);
+            swprintf_s(lpReturnedString, nSize, L"%d", channel);
+            return (DWORD)wcslen(lpReturnedString);
+        }
+    }
+    if (g_origGetPrivateProfileStringW) {
+        return g_origGetPrivateProfileStringW(lpAppName, lpKeyName, lpDefault, lpReturnedString, nSize, lpFileName);
+    }
+    if (lpDefault && lpReturnedString && nSize > 0) {
+        wcsncpy_s(lpReturnedString, nSize, lpDefault, _TRUNCATE);
+        return (DWORD)wcslen(lpReturnedString);
+    }
+    return 0;
+}
+
+using GetPrivateProfileIntA_t = UINT(WINAPI*)(LPCSTR, LPCSTR, INT, LPCSTR);
+GetPrivateProfileIntA_t g_origGetPrivateProfileIntA = nullptr;
+
+UINT WINAPI HookedGetPrivateProfileIntA(LPCSTR lpAppName, LPCSTR lpKeyName, INT nDefault, LPCSTR lpFileName) {
+    if (lpAppName && strcmp(lpAppName, "VoiceSpeak") == 0) {
+        if (lpKeyName) {
+            int channel = GetPlayerSpeakingChannel(lpKeyName);
+            return (UINT)channel;
+        }
+    }
+    if (g_origGetPrivateProfileIntA) {
+        return g_origGetPrivateProfileIntA(lpAppName, lpKeyName, nDefault, lpFileName);
+    }
+    return nDefault;
+}
+
+using GetPrivateProfileStringA_t = DWORD(WINAPI*)(LPCSTR, LPCSTR, LPCSTR, LPSTR, DWORD, LPCSTR);
+GetPrivateProfileStringA_t g_origGetPrivateProfileStringA = nullptr;
+
+DWORD WINAPI HookedGetPrivateProfileStringA(LPCSTR lpAppName, LPCSTR lpKeyName, LPCSTR lpDefault, LPSTR lpReturnedString, DWORD nSize, LPCSTR lpFileName) {
+    if (lpAppName && strcmp(lpAppName, "VoiceSpeak") == 0) {
+        if (lpKeyName) {
+            int channel = GetPlayerSpeakingChannel(lpKeyName);
+            _snprintf_s(lpReturnedString, nSize, _TRUNCATE, "%d", channel);
+            return (DWORD)strlen(lpReturnedString);
+        }
+    }
+    if (g_origGetPrivateProfileStringA) {
+        return g_origGetPrivateProfileStringA(lpAppName, lpKeyName, lpDefault, lpReturnedString, nSize, lpFileName);
+    }
+    if (lpDefault && lpReturnedString && nSize > 0) {
+        strncpy_s(lpReturnedString, nSize, lpDefault, _TRUNCATE);
+        return (DWORD)strlen(lpReturnedString);
+    }
+    return 0;
+}
+
 // GetAsyncKeyState hook — when ImGui's panel has the mouse focus,
 // return 0 for the mouse-button VKs so L2's polling-based input
 // (DirectInput-style: check GetAsyncKeyState every frame and act on
@@ -2256,12 +2317,44 @@ bool InstallOverlay() {
         }
     }
     HMODULE kernel32 = GetModuleHandleA("kernel32.dll");
+    
+    // 1. GetPrivateProfileIntW
     void* gppiAddr = kernel32 ? GetProcAddress(kernel32, "GetPrivateProfileIntW") : nullptr;
     if (gppiAddr) {
         if (MH_CreateHook(gppiAddr,
                 reinterpret_cast<void*>(&HookedGetPrivateProfileIntW),
                 reinterpret_cast<void**>(&g_origGetPrivateProfileIntW)) != MH_OK) {
             Logf("[l2voice] overlay: GetPrivateProfileIntW hook install failed\n");
+        }
+    }
+    
+    // 2. GetPrivateProfileStringW
+    void* gppsAddr = kernel32 ? GetProcAddress(kernel32, "GetPrivateProfileStringW") : nullptr;
+    if (gppsAddr) {
+        if (MH_CreateHook(gppsAddr,
+                reinterpret_cast<void*>(&HookedGetPrivateProfileStringW),
+                reinterpret_cast<void**>(&g_origGetPrivateProfileStringW)) != MH_OK) {
+            Logf("[l2voice] overlay: GetPrivateProfileStringW hook install failed\n");
+        }
+    }
+    
+    // 3. GetPrivateProfileIntA
+    void* gppiaAddr = kernel32 ? GetProcAddress(kernel32, "GetPrivateProfileIntA") : nullptr;
+    if (gppiaAddr) {
+        if (MH_CreateHook(gppiaAddr,
+                reinterpret_cast<void*>(&HookedGetPrivateProfileIntA),
+                reinterpret_cast<void**>(&g_origGetPrivateProfileIntA)) != MH_OK) {
+            Logf("[l2voice] overlay: GetPrivateProfileIntA hook install failed\n");
+        }
+    }
+    
+    // 4. GetPrivateProfileStringA
+    void* gppsaAddr = kernel32 ? GetProcAddress(kernel32, "GetPrivateProfileStringA") : nullptr;
+    if (gppsaAddr) {
+        if (MH_CreateHook(gppsaAddr,
+                reinterpret_cast<void*>(&HookedGetPrivateProfileStringA),
+                reinterpret_cast<void**>(&g_origGetPrivateProfileStringA)) != MH_OK) {
+            Logf("[l2voice] overlay: GetPrivateProfileStringA hook install failed\n");
         }
     }
     if (MH_EnableHook(MH_ALL_HOOKS) != MH_OK) {
