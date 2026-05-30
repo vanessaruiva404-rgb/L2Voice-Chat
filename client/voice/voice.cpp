@@ -76,10 +76,10 @@ static void WriteVoiceSpeakIni(const wchar_t* ini_path) {
             swprintf_s(wval, L"%d", ch);
             WritePrivateProfileStringW(L"VoiceSpeak", wname, wval, speak_path);
         } else {
-            // Speaker expired: remove key from INI
+            // Speaker expired: set key to -1 in INI to force UnrealScript's FConfigCache to update correctly
             wchar_t wname[64] = {};
             MultiByteToWideChar(CP_ACP, 0, kv.first.c_str(), -1, wname, 64);
-            WritePrivateProfileStringW(L"VoiceSpeak", wname, nullptr, speak_path);
+            WritePrivateProfileStringW(L"VoiceSpeak", wname, L"-1", speak_path);
             expired_keys.push_back(kv.first);
         }
     }
@@ -159,55 +159,73 @@ void OnCaptureFrame(const int16_t* pcm, uint32_t samples) {
     if (!g_mod.running.load()) return;
     if (samples != kFrameSamples) return;
 
+    // Run APM on capture frame first to keep AEC and denoisers warm,
+    // and to perform VAD (Voice Activity Detection).
+    int16_t apm_pcm[kFrameSamples];
+    std::memcpy(apm_pcm, pcm, samples * sizeof(int16_t));
+    int16_t aec_ref[kFrameSamples];
+    g_mod.playback.PopPlaybackReference(aec_ref, kFrameSamples);
+    
+    g_mod.apm.ProcessFrame(apm_pcm, samples, aec_ref);
+    bool is_speaking = g_mod.apm.IsSpeaking();
+
     bool focused = !g_mod.cfg.require_focus || L2HasForegroundFocus();
 
-    // Channel priority on multi-PTT-held: party > clan > ally > proximity.
-    // The narrower group wins so pressing party + ally simultaneously
-    // talks to party (the smaller circle). always_on only fires
-    // proximity — accidentally broadcasting on a group channel without
-    // an explicit press would be a footgun.
     auto held = [](int vk) -> bool {
         return vk != 0 && (GetAsyncKeyState(vk) & 0x8000) != 0;
     };
+
     uint8_t channel = 0xFF;   // none
+    bool ptt_held = false;
+
     // Legacy explicit-key path still wins when held — power users keep
     // multiple PTTs configured. Otherwise the main PTT (and always-on)
     // route to the user's selected active TX channel.
-    if      (held(g_mod.cfg.ptt_party))     channel = 1;
-    else if (held(g_mod.cfg.ptt_clan))      channel = 2;
-    else if (held(g_mod.cfg.ptt_ally))      channel = 3;
-    else if (held(g_mod.cfg.ptt_proximity)
-          || g_mod.cfg.always_on) {
+    if (held(g_mod.cfg.ptt_party)) {
+        channel = 1;
+        ptt_held = true;
+    } else if (held(g_mod.cfg.ptt_clan)) {
+        channel = 2;
+        ptt_held = true;
+    } else if (held(g_mod.cfg.ptt_ally)) {
+        channel = 3;
+        ptt_held = true;
+    } else if (held(g_mod.cfg.ptt_proximity)) {
         int sel = g_mod.ch_prefs.active_tx_channel;
         if (sel < 0 || sel > 4) sel = 0;
-        // Mode auto-redirect (Prompt §Regra 6): when our own clan has
-        // an active operational mode AND the user hasn't explicitly
-        // picked a non-Proximity TX, route through Clan so the server's
-        // unified-mode router fans the packet to clan+ally with
-        // override. Players who explicitly switch TX (e.g. Party) are
-        // left alone — they're opting out of the mode broadcast for
-        // that PTT press.
+        // Mode auto-redirect (Prompt §Regra 6)
         if (sel == 0 && g_mod.net.LocalClanMode() != 0) {
-            sel = 2;  // Clan ingress → server rewrites to ChModeUnified
+            sel = 2;
+        }
+        channel = (uint8_t)sel;
+        ptt_held = true;
+    } else if (g_mod.cfg.always_on) {
+        int sel = g_mod.ch_prefs.active_tx_channel;
+        if (sel < 0 || sel > 4) sel = 0;
+        if (sel == 0 && g_mod.net.LocalClanMode() != 0) {
+            sel = 2;
         }
         channel = (uint8_t)sel;
     }
-    bool transmit = focused && channel != 0xFF;
+
+    // We only transmit if:
+    // 1. Focused (or focus not required)
+    // 2. Channel is valid
+    // 3. EITHER a PTT key is held, OR always_on is enabled AND the user is actually speaking (VAD).
+    bool transmit = focused && (channel != 0xFF) && (ptt_held || (g_mod.cfg.always_on && is_speaking));
 
     static uint32_t cap_frames = 0;
     if ((++cap_frames % 50) == 0) {
-        char dbg[220];
+        char dbg[250];
         _snprintf_s(dbg, sizeof(dbg), _TRUNCATE,
-            "[l2voice] capture=%u tx=%d ch=%u focus=%d on=%d ws=%d sid=%u\n",
+            "[l2voice] capture=%u tx=%d ch=%u focus=%d on=%d spk=%d ws=%d sid=%u\n",
             cap_frames, transmit ? 1 : 0,
             channel == 0xFF ? 0xFF : channel,
             focused ? 1 : 0, g_mod.cfg.always_on ? 1 : 0,
+            is_speaking ? 1 : 0,
             g_mod.net.IsConnected() ? 1 : 0, g_mod.net.SessionID());
         OutputDebugStringA(dbg);
     }
-
-    if (!transmit) return;
-    if (!g_mod.net.IsConnected()) return;
 
     char my_name[64] = {};
     if (g_mod.cfg.char_name[0]) {
@@ -215,41 +233,41 @@ void OnCaptureFrame(const int16_t* pcm, uint32_t samples) {
     } else if (g_mod.net.PlayerID() != 0) {
         GetPlayerName(g_mod.net.PlayerID(), my_name, sizeof(my_name));
     }
-    
-    if (my_name[0]) {
-        std::lock_guard<std::mutex> lk(g_local_prefs_mu);
-        g_speaker_channel[my_name] = channel;
-        g_speaker_last_time[my_name] = NowMillis();
-        WriteVoiceSpeakIni(g_mod.ini_path);  // Update l2voice_speak.ini for UnrealScript to read
+
+    if (transmit) {
+        if (my_name[0]) {
+            std::lock_guard<std::mutex> lk(g_local_prefs_mu);
+            g_speaker_channel[my_name] = channel;
+            g_speaker_last_time[my_name] = NowMillis();
+            WriteVoiceSpeakIni(g_mod.ini_path);  // Update l2voice_speak.ini for UnrealScript to read
+        }
+
+        if (!g_mod.net.IsConnected()) return;
+
+        Logf("[l2voice] OnCaptureFrame: starting transmit. channel=%u\n", (unsigned)channel);
+
+        Logf("[l2voice] OnCaptureFrame: before Encode\n");
+        uint8_t opus_buf[kMaxPacketBytes];
+        int n = g_mod.encoder.Encode(apm_pcm, opus_buf, sizeof(opus_buf));
+        Logf("[l2voice] OnCaptureFrame: after Encode n=%d\n", n);
+        if (n <= 0) return;
+
+        uint16_t seq = g_mod.tx_seq.fetch_add(1, std::memory_order_relaxed);
+        Logf("[l2voice] OnCaptureFrame: before Send proximity/group channel=%u seq=%u\n", (unsigned)channel, (unsigned)seq);
+        if (channel == 0) g_mod.net.SendProximityFrame(seq, opus_buf, n);
+        else              g_mod.net.SendGroupFrame(channel, seq, opus_buf, n);
+        Logf("[l2voice] OnCaptureFrame: transmit done\n");
+    } else {
+        if (my_name[0]) {
+            std::lock_guard<std::mutex> lk(g_local_prefs_mu);
+            auto it = g_speaker_last_time.find(my_name);
+            if (it != g_speaker_last_time.end() && it->second != 0) {
+                g_speaker_channel[my_name] = -1;
+                g_speaker_last_time[my_name] = 0; // force immediate expiration
+                WriteVoiceSpeakIni(g_mod.ini_path);
+            }
+        }
     }
-
-    Logf("[l2voice] OnCaptureFrame: starting transmit. channel=%u\n", (unsigned)channel);
-
-    // APM: AEC → HPF → NS (rnnoise) → AGC. Operates in-place on a
-    // mutable copy of the frame so the capture caller still owns its
-    // buffer. The AEC reference is the most recent 20ms of mixed
-    // playback (downmix of L/R that went to the speakers) — Speex DSP
-    // adapts to the small skew between this snapshot and the actual
-    // round-trip to the mic.
-    int16_t apm_pcm[kFrameSamples];
-    std::memcpy(apm_pcm, pcm, samples * sizeof(int16_t));
-    int16_t aec_ref[kFrameSamples];
-    g_mod.playback.PopPlaybackReference(aec_ref, kFrameSamples);
-    
-    Logf("[l2voice] OnCaptureFrame: before ProcessFrame\n");
-    g_mod.apm.ProcessFrame(apm_pcm, samples, aec_ref);
-    
-    Logf("[l2voice] OnCaptureFrame: before Encode\n");
-    uint8_t opus_buf[kMaxPacketBytes];
-    int n = g_mod.encoder.Encode(apm_pcm, opus_buf, sizeof(opus_buf));
-    Logf("[l2voice] OnCaptureFrame: after Encode n=%d\n", n);
-    if (n <= 0) return;
-
-    uint16_t seq = g_mod.tx_seq.fetch_add(1, std::memory_order_relaxed);
-    Logf("[l2voice] OnCaptureFrame: before Send proximity/group channel=%u seq=%u\n", (unsigned)channel, (unsigned)seq);
-    if (channel == 0) g_mod.net.SendProximityFrame(seq, opus_buf, n);
-    else              g_mod.net.SendGroupFrame(channel, seq, opus_buf, n);
-    Logf("[l2voice] OnCaptureFrame: transmit done\n");
 }
 
 void OnIncomingPacket(uint8_t channel, uint32_t src, uint16_t /*seq*/,
