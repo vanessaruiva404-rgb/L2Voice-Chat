@@ -89,6 +89,9 @@ static void WriteVoiceSpeakIni(const wchar_t* ini_path) {
         g_speaker_last_time.erase(key);
         g_speaker_channel.erase(key);
     }
+
+    // Flush the Windows INI cache to disk immediately so Unreal Engine reads the file instantly
+    WritePrivateProfileStringW(nullptr, nullptr, nullptr, speak_path);
 }
 
 
@@ -558,6 +561,18 @@ bool Init(const Config& cfg) {
 
     g_mod.cfg = cfg;
     LoadChannelPrefs();
+
+    // Clear l2voice_speak.ini on initialization to prevent stale speakers from previous sessions
+    if (g_mod.ini_path[0] != 0) {
+        wchar_t speak_path[MAX_PATH];
+        wcsncpy_s(speak_path, MAX_PATH, g_mod.ini_path, MAX_PATH - 1);
+        wchar_t* lastSlash = wcsrchr(speak_path, L'\\');
+        if (lastSlash) {
+            wcscpy_s(lastSlash + 1, MAX_PATH - (lastSlash - speak_path) - 1, L"l2voice_speak.ini");
+            WritePrivateProfileStringW(L"VoiceSpeak", nullptr, nullptr, speak_path);
+            WritePrivateProfileStringW(nullptr, nullptr, nullptr, speak_path); // flush
+        }
+    }
 
     // APM config — exposed in voice.ini under [voice].apm_*. Defaults
     // match ApmConfig's defaults (AEC+NS+AGC+HPF on).
