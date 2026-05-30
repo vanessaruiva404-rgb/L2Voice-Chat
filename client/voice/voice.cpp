@@ -76,10 +76,10 @@ static void WriteVoiceSpeakIni(const wchar_t* ini_path) {
             swprintf_s(wval, L"%d", ch);
             WritePrivateProfileStringW(L"VoiceSpeak", wname, wval, speak_path);
         } else {
-            // Speaker expired: set key to -1 in INI to force UnrealScript's FConfigCache to update correctly
+            // Speaker expired: set key to 99 in INI to force UnrealScript's FConfigCache to update correctly (positive sentinel value)
             wchar_t wname[64] = {};
             MultiByteToWideChar(CP_ACP, 0, kv.first.c_str(), -1, wname, 64);
-            WritePrivateProfileStringW(L"VoiceSpeak", wname, L"-1", speak_path);
+            WritePrivateProfileStringW(L"VoiceSpeak", wname, L"99", speak_path);
             expired_keys.push_back(kv.first);
         }
     }
@@ -265,7 +265,7 @@ void OnCaptureFrame(const int16_t* pcm, uint32_t samples) {
             std::lock_guard<std::mutex> lk(g_local_prefs_mu);
             auto it = g_speaker_last_time.find(my_name);
             if (it != g_speaker_last_time.end() && it->second != 0) {
-                g_speaker_channel[my_name] = -1;
+                g_speaker_channel[my_name] = 99;
                 g_speaker_last_time[my_name] = 0; // force immediate expiration
                 WriteVoiceSpeakIni(g_mod.ini_path);
             }
