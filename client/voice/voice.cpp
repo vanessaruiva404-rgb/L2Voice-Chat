@@ -892,14 +892,30 @@ bool HasActiveSpeakers() {
 int GetPlayerSpeakingChannelImpl(const char* name) {
     if (!name || !name[0]) return -1;
     std::lock_guard<std::mutex> lk(g_local_prefs_mu);
+    
+    // First try exact match (fastest path)
     auto it = g_speaker_last_time.find(name);
     if (it != g_speaker_last_time.end()) {
         int64_t last_time = it->second;
-        if (NowMillis() - last_time < 400) {
+        // Extended window to 600ms to account for 100ms polling interval
+        // in BottomBar.uc timer
+        if (NowMillis() - last_time < 600) {
             auto chIt = g_speaker_channel.find(name);
             return (chIt != g_speaker_channel.end()) ? chIt->second : -1;
         }
     }
+    
+    // Case-insensitive fallback: names from UnrealScript (pawnInfo.Name) may
+    // have different capitalization than names from the voice server network.
+    for (auto& kv : g_speaker_last_time) {
+        if (_stricmp(kv.first.c_str(), name) == 0) {
+            if (NowMillis() - kv.second < 600) {
+                auto chIt = g_speaker_channel.find(kv.first);
+                return (chIt != g_speaker_channel.end()) ? chIt->second : -1;
+            }
+        }
+    }
+    
     return -1;
 }
 
