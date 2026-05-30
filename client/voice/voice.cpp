@@ -59,8 +59,10 @@ static void SanitizeName(const char* src, char* dst, size_t maxLen) {
 
 // Writes the current speaking state to l2voice_speak.ini (next to voice.ini).
 // Must be called while holding g_local_prefs_mu.
-// UnrealScript reads this file via GetINIInt("VoiceSpeak", playerName, channel, "..\\system\\l2voice_speak.ini")
-// after calling RefreshINI("..\\system\\l2voice_speak.ini") to bypass NWindow's FConfigCache.
+// Strategy: ACTIVE speakers → write channel number (0-4).
+//           EXPIRED speakers → DELETE the key from the INI entirely.
+//           When key is absent, GetINIInt returns default (-1) → emitter destroyed.
+// This defeats Unreal's FConfigCache which cannot cache a key that does not exist.
 static void WriteVoiceSpeakIni(const wchar_t* ini_path) {
     if (!ini_path || ini_path[0] == 0) return;
 
@@ -76,6 +78,7 @@ static void WriteVoiceSpeakIni(const wchar_t* ini_path) {
 
     int64_t now = NowMillis();
     std::vector<std::string> expired_keys;
+    int active_count = 0;
 
     // Write each active speaker (within 600ms window) to the file
     for (auto& kv : g_speaker_last_time) {
@@ -83,32 +86,39 @@ static void WriteVoiceSpeakIni(const wchar_t* ini_path) {
         SanitizeName(kv.first.c_str(), clean_name, sizeof(clean_name));
 
         if (now - kv.second < 600) {
+            // Speaker is active: write channel number
             auto chIt = g_speaker_channel.find(kv.first);
             int ch = (chIt != g_speaker_channel.end()) ? chIt->second : 0;
             char val[8];
             sprintf_s(val, "%d", ch);
             WritePrivateProfileStringA("VoiceSpeak", clean_name, val, speak_path);
             Logf("[l2voice] WriteVoiceSpeakIni: %s (%s) = %s (elapsed=%lldms)\n", kv.first.c_str(), clean_name, val, (long long)(now - kv.second));
+            active_count++;
         } else {
-            // Speaker expired: keep writing 99 for 2 seconds to ensure the game client catches it
-            WritePrivateProfileStringA("VoiceSpeak", clean_name, "99", speak_path);
-            Logf("[l2voice] WriteVoiceSpeakIni (EXPIRED): %s (%s) = 99 (elapsed=%lldms)\n", kv.first.c_str(), clean_name, (long long)(now - kv.second));
-
-            if (now - kv.second >= 2000) {
-                expired_keys.push_back(kv.first);
-            }
+            // Speaker expired: DELETE the key so Unreal's cache cannot hold stale data.
+            // When the key is absent, GetINIInt returns default (-1) → emitter is removed.
+            WritePrivateProfileStringA("VoiceSpeak", clean_name, nullptr, speak_path);
+            Logf("[l2voice] WriteVoiceSpeakIni (EXPIRED): %s (%s) key deleted (elapsed=%lldms)\n", kv.first.c_str(), clean_name, (long long)(now - kv.second));
+            expired_keys.push_back(kv.first);
         }
     }
 
-    // Clean up internal speaker maps for expired keys to avoid redundant INI writes
+    // Clean up internal speaker maps for expired keys
     for (const auto& key : expired_keys) {
         g_speaker_last_time.erase(key);
         g_speaker_channel.erase(key);
     }
 
-    // Flush the Windows INI cache to disk immediately so Unreal Engine reads the file instantly
+    // If no speakers remain, delete the entire [VoiceSpeak] section to fully reset Unreal's cache
+    if (active_count == 0) {
+        WritePrivateProfileStringA("VoiceSpeak", nullptr, nullptr, speak_path);
+        Logf("[l2voice] WriteVoiceSpeakIni: no active speakers, section cleared\n");
+    }
+
+    // Flush the Windows INI cache to disk immediately
     WritePrivateProfileStringA(nullptr, nullptr, nullptr, speak_path);
 }
+
 
 
 // Per-channel listening prefs. Defaults: all enabled, all at 1.0.
@@ -281,8 +291,10 @@ void OnCaptureFrame(const int16_t* pcm, uint32_t samples) {
             std::lock_guard<std::mutex> lk(g_local_prefs_mu);
             auto it = g_speaker_last_time.find(my_name);
             if (it != g_speaker_last_time.end() && it->second > NowMillis() - 600) {
-                g_speaker_channel[my_name] = 99;
-                g_speaker_last_time[my_name] = NowMillis() - 600; // set to just-expired, allowing 1.4s of repeated 99 writes
+                // Force-expire immediately: WriteVoiceSpeakIni will see elapsed >= 600ms
+                // and DELETE the key from the INI. Unreal cannot cache a missing key,
+                // so GetINIInt returns -1 and the emitter is destroyed on the next poll.
+                it->second = NowMillis() - 600;
                 WriteVoiceSpeakIni(g_mod.ini_path);
             }
         }
