@@ -69,6 +69,8 @@ void Apm::Reset() {
     noise_floor_ = 1e-4f;
     ns_envelope_ = 1.0f;
     agc_gain_    = 1.0f;
+    is_speaking_ = false;
+    speech_hangover_frames_ = 0;
     // Re-create the RNNoise state to flush its internal adaptive
     // statistics — happens on device change so we don't carry over
     // the old room's noise profile.
@@ -151,6 +153,8 @@ float Apm::ProcessFrame(int16_t* pcm, uint32_t samples,
     float frame_rms = (float)std::sqrt(acc / samples);
     float frame_db  = LinearToDb(frame_rms);
 
+    float max_vad = 0.0f;
+
     // ---- Noise suppressor ----
     // Primary path: RNNoise (xiph/rnnoise) — neural network NS.
     // Operates on 480-sample chunks at 48kHz; our frame is 960 (20ms),
@@ -169,7 +173,8 @@ float Apm::ProcessFrame(int16_t* pcm, uint32_t samples,
         for (int half = 0; half < 2; ++half) {
             int16_t* p = pcm + half * 480;
             for (int i = 0; i < 480; ++i) rnn_chunk_[i] = (float)p[i];
-            rnnoise_process_frame(st, rnn_chunk_, rnn_chunk_);
+            float p_vad = rnnoise_process_frame(st, rnn_chunk_, rnn_chunk_);
+            if (p_vad > max_vad) max_vad = p_vad;
             for (int i = 0; i < 480; ++i) {
                 float v = rnn_chunk_[i];
                 if      (v >  32767.0f) v =  32767.0f;
@@ -208,6 +213,26 @@ float Apm::ProcessFrame(int16_t* pcm, uint32_t samples,
             frame_rms *= ns_envelope_;
         }
         Logf("[l2voice] Apm::ProcessFrame: after legacy NS\n");
+    }
+
+    // Voice Activity Detection (VAD) decision with 500ms hangover (25 * 20ms frames)
+    bool current_frame_speaking = false;
+    if (cfg_.ns_enabled && rnn_state_ != nullptr && samples == 960) {
+        current_frame_speaking = (max_vad > 0.85f);
+    } else {
+        current_frame_speaking = (frame_db > -42.0f);
+    }
+
+    if (current_frame_speaking) {
+        is_speaking_ = true;
+        speech_hangover_frames_ = 25;
+    } else {
+        if (speech_hangover_frames_ > 0) {
+            speech_hangover_frames_--;
+            is_speaking_ = true;
+        } else {
+            is_speaking_ = false;
+        }
     }
 
     // ---- AGC ----
