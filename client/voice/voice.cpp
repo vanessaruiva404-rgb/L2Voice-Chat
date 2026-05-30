@@ -54,12 +54,14 @@ static void WriteVoiceSpeakIni(const wchar_t* ini_path) {
     if (!ini_path || ini_path[0] == 0) return;
 
     // Build path: same directory as voice.ini, but named l2voice_speak.ini
-    wchar_t speak_path[MAX_PATH];
-    wcsncpy_s(speak_path, MAX_PATH, ini_path, MAX_PATH - 1);
+    char speak_path[MAX_PATH];
+    size_t dummy = 0;
+    wcstombs_s(&dummy, speak_path, ini_path, MAX_PATH - 1);
+    
     // Find the filename portion and replace it
-    wchar_t* lastSlash = wcsrchr(speak_path, L'\\');
+    char* lastSlash = strrchr(speak_path, '\\');
     if (!lastSlash) return;
-    wcscpy_s(lastSlash + 1, MAX_PATH - (lastSlash - speak_path) - 1, L"l2voice_speak.ini");
+    strcpy_s(lastSlash + 1, MAX_PATH - (lastSlash - speak_path) - 1, "l2voice_speak.ini");
 
     int64_t now = NowMillis();
     std::vector<std::string> expired_keys;
@@ -69,17 +71,12 @@ static void WriteVoiceSpeakIni(const wchar_t* ini_path) {
         if (now - kv.second < 600) {
             auto chIt = g_speaker_channel.find(kv.first);
             int ch = (chIt != g_speaker_channel.end()) ? chIt->second : 0;
-            // Convert name to wide string for WinAPI
-            wchar_t wname[64] = {};
-            MultiByteToWideChar(CP_ACP, 0, kv.first.c_str(), -1, wname, 64);
-            wchar_t wval[8];
-            swprintf_s(wval, L"%d", ch);
-            WritePrivateProfileStringW(L"VoiceSpeak", wname, wval, speak_path);
+            char val[8];
+            sprintf_s(val, "%d", ch);
+            WritePrivateProfileStringA("VoiceSpeak", kv.first.c_str(), val, speak_path);
         } else {
             // Speaker expired: set key to 99 in INI to force UnrealScript's FConfigCache to update correctly (positive sentinel value)
-            wchar_t wname[64] = {};
-            MultiByteToWideChar(CP_ACP, 0, kv.first.c_str(), -1, wname, 64);
-            WritePrivateProfileStringW(L"VoiceSpeak", wname, L"99", speak_path);
+            WritePrivateProfileStringA("VoiceSpeak", kv.first.c_str(), "99", speak_path);
             expired_keys.push_back(kv.first);
         }
     }
@@ -91,7 +88,7 @@ static void WriteVoiceSpeakIni(const wchar_t* ini_path) {
     }
 
     // Flush the Windows INI cache to disk immediately so Unreal Engine reads the file instantly
-    WritePrivateProfileStringW(nullptr, nullptr, nullptr, speak_path);
+    WritePrivateProfileStringA(nullptr, nullptr, nullptr, speak_path);
 }
 
 
@@ -564,13 +561,14 @@ bool Init(const Config& cfg) {
 
     // Clear l2voice_speak.ini on initialization to prevent stale speakers from previous sessions
     if (g_mod.ini_path[0] != 0) {
-        wchar_t speak_path[MAX_PATH];
-        wcsncpy_s(speak_path, MAX_PATH, g_mod.ini_path, MAX_PATH - 1);
-        wchar_t* lastSlash = wcsrchr(speak_path, L'\\');
+        char speak_path[MAX_PATH];
+        size_t dummy = 0;
+        wcstombs_s(&dummy, speak_path, g_mod.ini_path, MAX_PATH - 1);
+        char* lastSlash = strrchr(speak_path, '\\');
         if (lastSlash) {
-            wcscpy_s(lastSlash + 1, MAX_PATH - (lastSlash - speak_path) - 1, L"l2voice_speak.ini");
-            WritePrivateProfileStringW(L"VoiceSpeak", nullptr, nullptr, speak_path);
-            WritePrivateProfileStringW(nullptr, nullptr, nullptr, speak_path); // flush
+            strcpy_s(lastSlash + 1, MAX_PATH - (lastSlash - speak_path) - 1, "l2voice_speak.ini");
+            WritePrivateProfileStringA("VoiceSpeak", nullptr, nullptr, speak_path);
+            WritePrivateProfileStringA(nullptr, nullptr, nullptr, speak_path); // flush
         }
     }
 
