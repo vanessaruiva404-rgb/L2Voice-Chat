@@ -46,6 +46,43 @@ std::unordered_map<std::string, int>     g_speaker_channel;
 std::unordered_map<std::string, int64_t> g_speaker_last_time;
 std::mutex                          g_local_prefs_mu;
 
+// Writes the current speaking state to l2voice_speak.ini (next to voice.ini).
+// Must be called while holding g_local_prefs_mu.
+// UnrealScript reads this file via GetINIInt("VoiceSpeak", playerName, channel, "l2voice_speak.ini")
+// after calling RefreshINI("l2voice_speak.ini") to bypass NWindow's FConfigCache.
+static void WriteVoiceSpeakIni(const wchar_t* ini_path) {
+    if (!ini_path || ini_path[0] == 0) return;
+
+    // Build path: same directory as voice.ini, but named l2voice_speak.ini
+    wchar_t speak_path[MAX_PATH];
+    wcsncpy_s(speak_path, MAX_PATH, ini_path, MAX_PATH - 1);
+    // Find the filename portion and replace it
+    wchar_t* lastSlash = wcsrchr(speak_path, L'\\');
+    if (!lastSlash) return;
+    wcscpy_s(lastSlash + 1, MAX_PATH - (lastSlash - speak_path) - 1, L"l2voice_speak.ini");
+
+    int64_t now = NowMillis();
+    // Write each active speaker (within 600ms window) to the file
+    for (auto& kv : g_speaker_last_time) {
+        if (now - kv.second < 600) {
+            auto chIt = g_speaker_channel.find(kv.first);
+            int ch = (chIt != g_speaker_channel.end()) ? chIt->second : 0;
+            // Convert name to wide string for WinAPI
+            wchar_t wname[64] = {};
+            MultiByteToWideChar(CP_ACP, 0, kv.first.c_str(), -1, wname, 64);
+            wchar_t wval[8];
+            swprintf_s(wval, L"%d", ch);
+            WritePrivateProfileStringW(L"VoiceSpeak", wname, wval, speak_path);
+        } else {
+            // Speaker expired: remove key from INI
+            wchar_t wname[64] = {};
+            MultiByteToWideChar(CP_ACP, 0, kv.first.c_str(), -1, wname, 64);
+            WritePrivateProfileStringW(L"VoiceSpeak", wname, nullptr, speak_path);
+        }
+    }
+}
+
+
 // Per-channel listening prefs. Defaults: all enabled, all at 1.0.
 // Loaded from voice.ini on init (keys ch_enabled_N / ch_volume_N),
 // pushed to the voice-service on connect so it has the latest state.
@@ -174,6 +211,7 @@ void OnCaptureFrame(const int16_t* pcm, uint32_t samples) {
         std::lock_guard<std::mutex> lk(g_local_prefs_mu);
         g_speaker_channel[my_name] = channel;
         g_speaker_last_time[my_name] = NowMillis();
+        WriteVoiceSpeakIni(g_mod.ini_path);  // Update l2voice_speak.ini for UnrealScript to read
     }
 
     Logf("[l2voice] OnCaptureFrame: starting transmit. channel=%u\n", (unsigned)channel);
@@ -304,6 +342,7 @@ void OnIncomingPacket(uint8_t channel, uint32_t src, uint16_t /*seq*/,
             std::lock_guard<std::mutex> lk(g_local_prefs_mu);
             g_speaker_channel[spName] = channel;
             g_speaker_last_time[spName] = NowMillis();
+            WriteVoiceSpeakIni(g_mod.ini_path);  // Update l2voice_speak.ini for UnrealScript to read
         }
         uint32_t pid = GetPlayerIdByName(spName);
         if (pid != 0) {
