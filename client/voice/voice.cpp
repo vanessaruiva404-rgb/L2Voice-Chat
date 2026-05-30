@@ -46,6 +46,17 @@ std::unordered_map<std::string, int>     g_speaker_channel;
 std::unordered_map<std::string, int64_t> g_speaker_last_time;
 std::mutex                          g_local_prefs_mu;
 
+static void SanitizeName(const char* src, char* dst, size_t maxLen) {
+    size_t dIdx = 0;
+    for (size_t sIdx = 0; src[sIdx] != '\0' && dIdx < maxLen - 1; ++sIdx) {
+        char c = src[sIdx];
+        if ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9')) {
+            dst[dIdx++] = c;
+        }
+    }
+    dst[dIdx] = '\0';
+}
+
 // Writes the current speaking state to Option.ini (next to voice.ini).
 // Must be called while holding g_local_prefs_mu.
 // UnrealScript reads this file via GetINIInt("VoiceSpeak", playerName, channel, "Option.ini")
@@ -68,18 +79,21 @@ static void WriteVoiceSpeakIni(const wchar_t* ini_path) {
 
     // Write each active speaker (within 600ms window) to the file
     for (auto& kv : g_speaker_last_time) {
+        char clean_name[64];
+        SanitizeName(kv.first.c_str(), clean_name, sizeof(clean_name));
+
         if (now - kv.second < 600) {
             auto chIt = g_speaker_channel.find(kv.first);
             int ch = (chIt != g_speaker_channel.end()) ? chIt->second : 0;
             char val[8];
             sprintf_s(val, "%d", ch);
-            WritePrivateProfileStringA("VoiceSpeak", kv.first.c_str(), val, speak_path);
-            Logf("[l2voice] WriteVoiceSpeakIni: %s = %s (elapsed=%lldms)\n", kv.first.c_str(), val, (long long)(now - kv.second));
+            WritePrivateProfileStringA("VoiceSpeak", clean_name, val, speak_path);
+            Logf("[l2voice] WriteVoiceSpeakIni: %s (%s) = %s (elapsed=%lldms)\n", kv.first.c_str(), clean_name, val, (long long)(now - kv.second));
         } else {
             // Speaker expired: set key to 99 in INI to force UnrealScript's FConfigCache to update correctly (positive sentinel value)
-            WritePrivateProfileStringA("VoiceSpeak", kv.first.c_str(), "99", speak_path);
+            WritePrivateProfileStringA("VoiceSpeak", clean_name, "99", speak_path);
             expired_keys.push_back(kv.first);
-            Logf("[l2voice] WriteVoiceSpeakIni (EXPIRED): %s = 99 (elapsed=%lldms)\n", kv.first.c_str(), (long long)(now - kv.second));
+            Logf("[l2voice] WriteVoiceSpeakIni (EXPIRED): %s (%s) = 99 (elapsed=%lldms)\n", kv.first.c_str(), clean_name, (long long)(now - kv.second));
         }
     }
 
