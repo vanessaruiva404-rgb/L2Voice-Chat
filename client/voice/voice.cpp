@@ -62,6 +62,8 @@ static void WriteVoiceSpeakIni(const wchar_t* ini_path) {
     wcscpy_s(lastSlash + 1, MAX_PATH - (lastSlash - speak_path) - 1, L"l2voice_speak.ini");
 
     int64_t now = NowMillis();
+    std::vector<std::string> expired_keys;
+
     // Write each active speaker (within 600ms window) to the file
     for (auto& kv : g_speaker_last_time) {
         if (now - kv.second < 600) {
@@ -78,7 +80,14 @@ static void WriteVoiceSpeakIni(const wchar_t* ini_path) {
             wchar_t wname[64] = {};
             MultiByteToWideChar(CP_ACP, 0, kv.first.c_str(), -1, wname, 64);
             WritePrivateProfileStringW(L"VoiceSpeak", wname, nullptr, speak_path);
+            expired_keys.push_back(kv.first);
         }
+    }
+
+    // Clean up internal speaker maps for expired keys to avoid redundant INI writes
+    for (const auto& key : expired_keys) {
+        g_speaker_last_time.erase(key);
+        g_speaker_channel.erase(key);
     }
 }
 
@@ -848,6 +857,16 @@ void OnRenderFrame() {
         OutputDebugStringA("[l2voice] resuming voice WS — player back in world\n");
         g_mod.net.ResumeWs();
         g_voice_suspended = false;
+    }
+
+    // Periodic speech cleanup: check every 100ms if there are cached speakers to expire
+    static int64_t last_speak_cleanup = 0;
+    if (now_ms - last_speak_cleanup >= 100) {
+        last_speak_cleanup = now_ms;
+        std::lock_guard<std::mutex> lk(g_local_prefs_mu);
+        if (!g_speaker_last_time.empty()) {
+            WriteVoiceSpeakIni(g_mod.ini_path);
+        }
     }
 }
 
