@@ -59,6 +59,8 @@ public:
     float ProcessFrame(int16_t* pcm, uint32_t samples,
                        const int16_t* aec_ref = nullptr);
 
+    bool IsSpeaking() const { return is_speaking_; }
+
     // Resets internal state (e.g., on capture-device change).
     void Reset();
 
@@ -85,6 +87,10 @@ private:
 
     // AGC state — current applied gain (we adjust slowly).
     float agc_gain_{1.0f};
+
+    // Voice activity detection state.
+    bool is_speaking_ = false;
+    int speech_hangover_frames_ = 0;
 
     // Pre-allocated scratch buffers to prevent stack allocation/prologue vectorization
     int16_t aec_out_buf_[960] = {};
