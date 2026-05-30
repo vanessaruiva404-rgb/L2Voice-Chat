@@ -57,14 +57,14 @@ static void SanitizeName(const char* src, char* dst, size_t maxLen) {
     dst[dIdx] = '\0';
 }
 
-// Writes the current speaking state to Option.ini (next to voice.ini).
+// Writes the current speaking state to l2voice_speak.ini (next to voice.ini).
 // Must be called while holding g_local_prefs_mu.
-// UnrealScript reads this file via GetINIInt("VoiceSpeak", playerName, channel, "Option.ini")
-// after calling RefreshINI("Option.ini") to bypass NWindow's FConfigCache.
+// UnrealScript reads this file via GetINIInt("VoiceSpeak", playerName, channel, "..\\system\\l2voice_speak.ini")
+// after calling RefreshINI("..\\system\\l2voice_speak.ini") to bypass NWindow's FConfigCache.
 static void WriteVoiceSpeakIni(const wchar_t* ini_path) {
     if (!ini_path || ini_path[0] == 0) return;
 
-    // Build path: same directory as voice.ini, but named Option.ini
+    // Build path: same directory as voice.ini, but named l2voice_speak.ini
     char speak_path[MAX_PATH];
     size_t dummy = 0;
     wcstombs_s(&dummy, speak_path, ini_path, MAX_PATH - 1);
@@ -72,7 +72,7 @@ static void WriteVoiceSpeakIni(const wchar_t* ini_path) {
     // Find the filename portion and replace it
     char* lastSlash = strrchr(speak_path, '\\');
     if (!lastSlash) return;
-    strcpy_s(lastSlash + 1, MAX_PATH - (lastSlash - speak_path) - 1, "Option.ini");
+    strcpy_s(lastSlash + 1, MAX_PATH - (lastSlash - speak_path) - 1, "l2voice_speak.ini");
 
     int64_t now = NowMillis();
     std::vector<std::string> expired_keys;
@@ -90,10 +90,13 @@ static void WriteVoiceSpeakIni(const wchar_t* ini_path) {
             WritePrivateProfileStringA("VoiceSpeak", clean_name, val, speak_path);
             Logf("[l2voice] WriteVoiceSpeakIni: %s (%s) = %s (elapsed=%lldms)\n", kv.first.c_str(), clean_name, val, (long long)(now - kv.second));
         } else {
-            // Speaker expired: set key to 99 in INI to force UnrealScript's FConfigCache to update correctly (positive sentinel value)
+            // Speaker expired: keep writing 99 for 2 seconds to ensure the game client catches it
             WritePrivateProfileStringA("VoiceSpeak", clean_name, "99", speak_path);
-            expired_keys.push_back(kv.first);
             Logf("[l2voice] WriteVoiceSpeakIni (EXPIRED): %s (%s) = 99 (elapsed=%lldms)\n", kv.first.c_str(), clean_name, (long long)(now - kv.second));
+
+            if (now - kv.second >= 2000) {
+                expired_keys.push_back(kv.first);
+            }
         }
     }
 
@@ -277,9 +280,9 @@ void OnCaptureFrame(const int16_t* pcm, uint32_t samples) {
         if (my_name[0]) {
             std::lock_guard<std::mutex> lk(g_local_prefs_mu);
             auto it = g_speaker_last_time.find(my_name);
-            if (it != g_speaker_last_time.end() && it->second != 0) {
+            if (it != g_speaker_last_time.end() && it->second > NowMillis() - 600) {
                 g_speaker_channel[my_name] = 99;
-                g_speaker_last_time[my_name] = 0; // force immediate expiration
+                g_speaker_last_time[my_name] = NowMillis() - 600; // set to just-expired, allowing 1.4s of repeated 99 writes
                 WriteVoiceSpeakIni(g_mod.ini_path);
             }
         }
@@ -575,14 +578,14 @@ bool Init(const Config& cfg) {
     g_mod.cfg = cfg;
     LoadChannelPrefs();
 
-    // Clear the VoiceSpeak section of Option.ini on initialization to prevent stale speakers from previous sessions
+        // Clear the VoiceSpeak section of l2voice_speak.ini on initialization to prevent stale speakers from previous sessions
     if (g_mod.ini_path[0] != 0) {
         char speak_path[MAX_PATH];
         size_t dummy = 0;
         wcstombs_s(&dummy, speak_path, g_mod.ini_path, MAX_PATH - 1);
         char* lastSlash = strrchr(speak_path, '\\');
         if (lastSlash) {
-            strcpy_s(lastSlash + 1, MAX_PATH - (lastSlash - speak_path) - 1, "Option.ini");
+            strcpy_s(lastSlash + 1, MAX_PATH - (lastSlash - speak_path) - 1, "l2voice_speak.ini");
             WritePrivateProfileStringA("VoiceSpeak", nullptr, nullptr, speak_path);
             WritePrivateProfileStringA(nullptr, nullptr, nullptr, speak_path); // flush
         }
