@@ -155,6 +155,7 @@ UINT WINAPI HookedGetPrivateProfileIntW(LPCWSTR lpAppName, LPCWSTR lpKeyName, IN
             size_t dummy = 0;
             wcstombs_s(&dummy, name, lpKeyName, _TRUNCATE);
             int channel = GetPlayerSpeakingChannel(name);
+            Logf("[l2voice] HookGetPrivProfileIntW VoiceSpeak key=%s -> channel=%d\n", name, channel);
             return (UINT)channel;
         }
     }
@@ -175,6 +176,7 @@ DWORD WINAPI HookedGetPrivateProfileStringW(LPCWSTR lpAppName, LPCWSTR lpKeyName
             wcstombs_s(&dummy, name, lpKeyName, _TRUNCATE);
             int channel = GetPlayerSpeakingChannel(name);
             swprintf_s(lpReturnedString, nSize, L"%d", channel);
+            Logf("[l2voice] HookGetPrivProfileStrW VoiceSpeak key=%s -> channel=%d\n", name, channel);
             return (DWORD)wcslen(lpReturnedString);
         }
     }
@@ -195,6 +197,7 @@ UINT WINAPI HookedGetPrivateProfileIntA(LPCSTR lpAppName, LPCSTR lpKeyName, INT 
     if (lpAppName && strcmp(lpAppName, "VoiceSpeak") == 0) {
         if (lpKeyName) {
             int channel = GetPlayerSpeakingChannel(lpKeyName);
+            Logf("[l2voice] HookGetPrivProfileIntA VoiceSpeak key=%s -> channel=%d\n", lpKeyName, channel);
             return (UINT)channel;
         }
     }
@@ -212,6 +215,7 @@ DWORD WINAPI HookedGetPrivateProfileStringA(LPCSTR lpAppName, LPCSTR lpKeyName, 
         if (lpKeyName) {
             int channel = GetPlayerSpeakingChannel(lpKeyName);
             _snprintf_s(lpReturnedString, nSize, _TRUNCATE, "%d", channel);
+            Logf("[l2voice] HookGetPrivProfileStrA VoiceSpeak key=%s -> channel=%d\n", lpKeyName, channel);
             return (DWORD)strlen(lpReturnedString);
         }
     }
