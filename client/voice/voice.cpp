@@ -60,9 +60,9 @@ static void SanitizeName(const char* src, char* dst, size_t maxLen) {
 // Writes the current speaking state to l2voice_speak.ini (next to voice.ini).
 // Must be called while holding g_local_prefs_mu.
 // Strategy: ACTIVE speakers → write channel number (0-4).
-//           EXPIRED speakers → DELETE the key from the INI entirely.
-//           When key is absent, GetINIInt returns default (-1) → emitter destroyed.
-// This defeats Unreal's FConfigCache which cannot cache a key that does not exist.
+//           EXPIRED speakers → explicitly write "-1" to the INI.
+//           This ensures Unreal's FConfigCache reads the new value and updates memory,
+//           avoiding the stale cache bug that happens when a key is simply deleted.
 static void WriteVoiceSpeakIni(const wchar_t* ini_path) {
     if (!ini_path || ini_path[0] == 0) return;
 
@@ -78,7 +78,6 @@ static void WriteVoiceSpeakIni(const wchar_t* ini_path) {
 
     int64_t now = NowMillis();
     std::vector<std::string> expired_keys;
-    int active_count = 0;
 
     // Write each active speaker (within 600ms window) to the file
     for (auto& kv : g_speaker_last_time) {
@@ -93,12 +92,10 @@ static void WriteVoiceSpeakIni(const wchar_t* ini_path) {
             sprintf_s(val, "%d", ch);
             WritePrivateProfileStringA("VoiceSpeak", clean_name, val, speak_path);
             Logf("[l2voice] WriteVoiceSpeakIni: %s (%s) = %s (elapsed=%lldms)\n", kv.first.c_str(), clean_name, val, (long long)(now - kv.second));
-            active_count++;
         } else {
-            // Speaker expired: DELETE the key so Unreal's cache cannot hold stale data.
-            // When the key is absent, GetINIInt returns default (-1) → emitter is removed.
-            WritePrivateProfileStringA("VoiceSpeak", clean_name, nullptr, speak_path);
-            Logf("[l2voice] WriteVoiceSpeakIni (EXPIRED): %s (%s) key deleted (elapsed=%lldms)\n", kv.first.c_str(), clean_name, (long long)(now - kv.second));
+            // Speaker expired: explicitly write "-1" to force Unreal's FConfigCache update
+            WritePrivateProfileStringA("VoiceSpeak", clean_name, "-1", speak_path);
+            Logf("[l2voice] WriteVoiceSpeakIni (EXPIRED): %s (%s) key set to -1 (elapsed=%lldms)\n", kv.first.c_str(), clean_name, (long long)(now - kv.second));
             expired_keys.push_back(kv.first);
         }
     }
@@ -107,12 +104,6 @@ static void WriteVoiceSpeakIni(const wchar_t* ini_path) {
     for (const auto& key : expired_keys) {
         g_speaker_last_time.erase(key);
         g_speaker_channel.erase(key);
-    }
-
-    // If no speakers remain, delete the entire [VoiceSpeak] section to fully reset Unreal's cache
-    if (active_count == 0) {
-        WritePrivateProfileStringA("VoiceSpeak", nullptr, nullptr, speak_path);
-        Logf("[l2voice] WriteVoiceSpeakIni: no active speakers, section cleared\n");
     }
 
     // Flush the Windows INI cache to disk immediately
