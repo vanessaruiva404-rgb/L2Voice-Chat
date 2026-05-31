@@ -93,9 +93,11 @@ static void WriteVoiceSpeakIni(const wchar_t* ini_path) {
             WritePrivateProfileStringA("VoiceSpeak", clean_name, val, speak_path);
             Logf("[l2voice] WriteVoiceSpeakIni: %s (%s) = %s (elapsed=%lldms)\n", kv.first.c_str(), clean_name, val, (long long)(now - kv.second));
         } else {
-            // Speaker expired: explicitly write "-1" to force Unreal's FConfigCache update
-            WritePrivateProfileStringA("VoiceSpeak", clean_name, "-1", speak_path);
-            Logf("[l2voice] WriteVoiceSpeakIni (EXPIRED): %s (%s) key set to -1 (elapsed=%lldms)\n", kv.first.c_str(), clean_name, (long long)(now - kv.second));
+            // Speaker expired: write 255 (invalid channel) to force UE2 FConfigCache update.
+            // We use 255 instead of -1 because GetINIInt in UE2 cannot parse negative
+            // integers — it returns 0 when it sees '-', making it look like proximity channel!
+            WritePrivateProfileStringA("VoiceSpeak", clean_name, "255", speak_path);
+            Logf("[l2voice] WriteVoiceSpeakIni (EXPIRED): %s (%s) key set to 255 (elapsed=%lldms)\n", kv.first.c_str(), clean_name, (long long)(now - kv.second));
             expired_keys.push_back(kv.first);
         }
     }
@@ -294,9 +296,12 @@ void OnCaptureFrame(const int16_t* pcm, uint32_t samples) {
                     strcpy_s(lastSlash2 + 1, MAX_PATH - (lastSlash2 - speak_path) - 1, "l2voice_speak.ini");
                     char clean_name[64];
                     SanitizeName(my_name, clean_name, sizeof(clean_name));
-                    WritePrivateProfileStringA("VoiceSpeak", clean_name, "-1", speak_path);
+                    // Write 255 (not -1!) because UE2's GetINIInt cannot parse negative integers.
+                    // It returns 0 for "-1" (sees '-' as invalid char), making UE2 think
+                    // the player is speaking on channel 0 (proximity). 255 is always > 4 (max channel).
+                    WritePrivateProfileStringA("VoiceSpeak", clean_name, "255", speak_path);
                     WritePrivateProfileStringA(nullptr, nullptr, nullptr, speak_path); // flush
-                    Logf("[l2voice] PTT released: wrote -1 for %s (%s) directly\n", my_name, clean_name);
+                    Logf("[l2voice] PTT released: wrote 255 for %s (%s) directly\n", my_name, clean_name);
                 }
                 g_speaker_last_time.erase(it);
                 g_speaker_channel.erase(my_name);
