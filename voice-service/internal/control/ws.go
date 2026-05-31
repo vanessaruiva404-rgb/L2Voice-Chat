@@ -19,6 +19,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -126,6 +127,15 @@ func handleWS(ctx context.Context, w http.ResponseWriter, r *http.Request,
 	// DLL to re-send on auth_pending — most DLL builds won't, since
 	// their port list is stable from "Login" click onward.
 	clientIP, _, _ := net.SplitHostPort(r.RemoteAddr)
+	if realIP := r.Header.Get("X-Real-IP"); realIP != "" {
+		clientIP = realIP
+	} else if forwarded := r.Header.Get("X-Forwarded-For"); forwarded != "" {
+		if comma := strings.IndexByte(forwarded, ','); comma >= 0 {
+			clientIP = strings.TrimSpace(forwarded[:comma])
+		} else {
+			clientIP = strings.TrimSpace(forwarded)
+		}
+	}
 	// Auth window — was 5 minutes, dropped to 30 s to bound the
 	// rpc_whoami retry budget per connection. The DLL reconnects
 	// roughly every 20 s due to IXWebSocket heartbeat handling;
