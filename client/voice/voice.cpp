@@ -281,12 +281,25 @@ void OnCaptureFrame(const int16_t* pcm, uint32_t samples) {
         if (my_name[0]) {
             std::lock_guard<std::mutex> lk(g_local_prefs_mu);
             auto it = g_speaker_last_time.find(my_name);
-            if (it != g_speaker_last_time.end() && it->second > NowMillis() - 600) {
-                // Force-expire immediately: WriteVoiceSpeakIni will see elapsed >= 600ms
-                // and DELETE the key from the INI. Unreal cannot cache a missing key,
-                // so GetINIInt returns -1 and the emitter is destroyed on the next poll.
-                it->second = NowMillis() - 600;
-                WriteVoiceSpeakIni(g_mod.ini_path);
+            if (it != g_speaker_last_time.end()) {
+                // PTT released: immediately write -1 to the INI so Unreal's
+                // FConfigCache gets a real value change (not a missing key).
+                // Then remove from internal maps so WriteVoiceSpeakIni won't
+                // re-add this player on the next periodic call.
+                char speak_path[MAX_PATH];
+                size_t dummy2 = 0;
+                wcstombs_s(&dummy2, speak_path, g_mod.ini_path, MAX_PATH - 1);
+                char* lastSlash2 = strrchr(speak_path, '\\');
+                if (lastSlash2) {
+                    strcpy_s(lastSlash2 + 1, MAX_PATH - (lastSlash2 - speak_path) - 1, "l2voice_speak.ini");
+                    char clean_name[64];
+                    SanitizeName(my_name, clean_name, sizeof(clean_name));
+                    WritePrivateProfileStringA("VoiceSpeak", clean_name, "-1", speak_path);
+                    WritePrivateProfileStringA(nullptr, nullptr, nullptr, speak_path); // flush
+                    Logf("[l2voice] PTT released: wrote -1 for %s (%s) directly\n", my_name, clean_name);
+                }
+                g_speaker_last_time.erase(it);
+                g_speaker_channel.erase(my_name);
             }
         }
     }
