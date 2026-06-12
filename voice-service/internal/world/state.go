@@ -91,16 +91,17 @@ func NewPlayerPrefs() *PlayerPrefs {
 // position) are updated by the Redis subscriber; the rest is set by
 // WS messages.
 type Player struct {
-	ID         uint32 // L2J ObjectId
-	SessionID  uint32 // 0 until voice WS auths
-	ClanID     uint32
-	AllyID     uint32 // 0 = no alliance
-	PartyID    uint64 // 0 = solo
-	InstanceID uint32
-	X, Y, Z    float32
-	IsLeader   bool         // L2Clan.getLeaderId == this.ID
-	Prefs      *PlayerPrefs // never nil after AddPlayer
-	LastSeen   time.Time
+	ID            uint32 // L2J ObjectId
+	SessionID     uint32 // 0 until voice WS auths
+	ClanID        uint32
+	AllyID        uint32 // 0 = no alliance
+	PartyID       uint64 // 0 = solo
+	InstanceID    uint32
+	X, Y, Z       float32
+	IsLeader      bool         // L2Clan.getLeaderId == this.ID
+	IsPartyLeader bool         // L2Party.getLeader() == this
+	Prefs         *PlayerPrefs // never nil after AddPlayer
+	LastSeen      time.Time
 }
 
 // Clan tracks voice-side clan state. SubLeaders is unlimited per
@@ -175,7 +176,7 @@ func NewWorldState() *WorldState {
 // ---- Player lifecycle ----
 
 func (w *WorldState) UpsertPlayer(id uint32, clanID, allyID uint32,
-	partyID uint64, instanceID uint32, isLeader bool) *Player {
+	partyID uint64, instanceID uint32, isLeader bool, isPartyLeader bool) *Player {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	p, ok := w.players[id]
@@ -188,6 +189,7 @@ func (w *WorldState) UpsertPlayer(id uint32, clanID, allyID uint32,
 	p.AllyID = allyID
 	p.InstanceID = instanceID
 	p.IsLeader = isLeader
+	p.IsPartyLeader = isPartyLeader
 	p.LastSeen = time.Now()
 	return p
 }
@@ -580,10 +582,10 @@ func (w *WorldState) RoleOf(id uint32) Role {
 	if !ok || p.ClanID == 0 {
 		return RoleMember
 	}
-	if p.IsLeader {
+	c, ok := w.clans[p.ClanID]
+	if ok && (p.IsLeader || c.LeaderID == id) {
 		return RoleLeader
 	}
-	c, ok := w.clans[p.ClanID]
 	if !ok {
 		return RoleMember
 	}
