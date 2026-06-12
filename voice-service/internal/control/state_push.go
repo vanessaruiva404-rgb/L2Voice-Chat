@@ -14,6 +14,7 @@ package control
 
 import (
 	"log"
+	"sort"
 
 	"github.com/luannbr/l2voice/voice-service/internal/topology"
 	"github.com/luannbr/l2voice/voice-service/internal/world"
@@ -71,6 +72,19 @@ func buildClientState(playerID uint32, w *world.WorldState, topo *topology.State
 	}
 	if p.PartyID != 0 {
 		out.PartyMembers = collectMembersByIDs(w.PartyMembers(playerID), topo, w, false, "")
+		sort.Slice(out.PartyMembers, func(i, j int) bool {
+			pi := w.Player(out.PartyMembers[i].ID)
+			pj := w.Player(out.PartyMembers[j].ID)
+			if pi != nil && pj != nil {
+				if pi.IsPartyLeader && !pj.IsPartyLeader {
+					return true
+				}
+				if !pi.IsPartyLeader && pj.IsPartyLeader {
+					return false
+				}
+			}
+			return out.PartyMembers[i].ID < out.PartyMembers[j].ID
+		})
 	}
 	if p.ClanID != 0 {
 		out.ClanMembers = collectMembersByIDs(w.ClanMembers(p.ClanID), topo, w, true, "clan")
