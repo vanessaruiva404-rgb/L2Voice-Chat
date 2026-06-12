@@ -243,7 +243,7 @@ func handleWS(ctx context.Context, w http.ResponseWriter, r *http.Request,
 	// Register the player in the world (if not yet seen via Redis
 	// events). This guarantees Prefs exists before the first command.
 	if worldState.Player(playerID) == nil {
-		worldState.UpsertPlayer(playerID, 0, 0, 0, 0, false)
+		worldState.UpsertPlayer(playerID, 0, 0, 0, 0, false, false)
 	}
 	worldState.SetPlayerSession(playerID, sess.ID)
 
