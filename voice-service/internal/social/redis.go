@@ -59,7 +59,8 @@ type allyChangePayload struct {
 }
 
 type partyChangePayload struct {
-	PartyID uint64 `json:"party_id"`
+	PartyID       uint64 `json:"party_id"`
+	IsPartyLeader bool   `json:"is_party_leader"`
 }
 
 type clanLeaderChangePayload struct {
@@ -256,16 +257,18 @@ func handleEvent(raw []byte, state *topology.State, w *world.WorldState,
 		var partyID uint64
 		var instanceID uint32
 		var oldClanID uint32
+		var isPartyLeader bool
 		if existing != nil {
 			allyID = existing.AllyID
 			partyID = existing.PartyID
 			instanceID = existing.InstanceID
 			oldClanID = existing.ClanID
+			isPartyLeader = existing.IsPartyLeader
 		}
 		for _, id := range w.ClanMembers(oldClanID) {
 			affected[id] = struct{}{}
 		}
-		w.UpsertPlayer(ev.PlayerID, p.ClanID, allyID, partyID, instanceID, p.IsLeader)
+		w.UpsertPlayer(ev.PlayerID, p.ClanID, allyID, partyID, instanceID, p.IsLeader, isPartyLeader)
 		for _, id := range w.ClanMembers(p.ClanID) {
 			affected[id] = struct{}{}
 		}
@@ -280,17 +283,19 @@ func handleEvent(raw []byte, state *topology.State, w *world.WorldState,
 		var partyID uint64
 		var isLeader bool
 		var oldAllyID uint32
+		var isPartyLeader bool
 		if existing != nil {
 			clanID = existing.ClanID
 			partyID = existing.PartyID
 			instanceID = existing.InstanceID
 			isLeader = existing.IsLeader
 			oldAllyID = existing.AllyID
+			isPartyLeader = existing.IsPartyLeader
 		}
 		for _, id := range w.AllyMembers(oldAllyID) {
 			affected[id] = struct{}{}
 		}
-		w.UpsertPlayer(ev.PlayerID, clanID, p.AllyID, partyID, instanceID, isLeader)
+		w.UpsertPlayer(ev.PlayerID, clanID, p.AllyID, partyID, instanceID, isLeader, isPartyLeader)
 		for _, id := range w.AllyMembers(p.AllyID) {
 			affected[id] = struct{}{}
 		}
@@ -313,7 +318,7 @@ func handleEvent(raw []byte, state *topology.State, w *world.WorldState,
 		for _, id := range w.PartyMembers(ev.PlayerID) {
 			affected[id] = struct{}{}
 		}
-		w.UpsertPlayer(ev.PlayerID, clanID, allyID, p.PartyID, instanceID, isLeader)
+		w.UpsertPlayer(ev.PlayerID, clanID, allyID, p.PartyID, instanceID, isLeader, p.IsPartyLeader)
 		// New party members (now see this player join).
 		for _, id := range w.PartyMembers(ev.PlayerID) {
 			affected[id] = struct{}{}
