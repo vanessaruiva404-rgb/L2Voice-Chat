@@ -14,7 +14,7 @@ type aWorld struct{ w *world.WorldState }
 func newA(t *testing.T) *aWorld { return &aWorld{w: world.NewWorldState()} }
 
 func (a *aWorld) player(id, clan, ally uint32, leader bool) *aWorld {
-	a.w.UpsertPlayer(id, clan, ally, 0, 0, leader)
+	a.w.UpsertPlayer(id, clan, ally, 0, 0, leader, false)
 	return a
 }
 func (a *aWorld) clan(id, leader uint32, subs ...uint32) *aWorld {
