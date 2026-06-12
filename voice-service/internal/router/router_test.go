@@ -24,7 +24,7 @@ func newFixture(t *testing.T) *fixture {
 // clan; allyID=0 means no alliance; partyID=0 means solo.
 func (f *fixture) addPlayer(id, clanID, allyID uint32, partyID uint64,
 	instance uint32, isLeader bool) *fixture {
-	f.w.UpsertPlayer(id, clanID, allyID, partyID, instance, isLeader)
+	f.w.UpsertPlayer(id, clanID, allyID, partyID, instance, isLeader, false)
 	return f
 }
 
