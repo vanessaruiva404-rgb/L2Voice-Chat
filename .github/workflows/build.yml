@@ -9,7 +9,7 @@ on:
 
 jobs:
   build-dll:
-    runs-on: windows-latest
+    runs-on: windows-2022
 
     steps:
       - name: Checkout repository
