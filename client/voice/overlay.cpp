@@ -1629,7 +1629,7 @@ void DrawPanel() {
     // connection status), no collapse triangle, no resize grip. The
     // minimize "_" button is rendered manually as an overlay on the
     // title-bar pixels (see below).
-    ImGui::SetNextWindowSize(ImVec2(320, 400), ImGuiCond_Always);
+    ImGui::SetNextWindowSize(ImVec2(320, 480), ImGuiCond_Always);
     char titleBuf[64];
     _snprintf_s(titleBuf, sizeof(titleBuf), _TRUNCATE,
         "l2voice  %s###l2voice_window",
@@ -1833,6 +1833,63 @@ void DrawPanel() {
             }
         }
     }
+
+    ImGui::Separator();
+    
+    // ====== Audio Devices ======
+    ImGui::TextDisabled(lang == 0 ? "Dispositivos de Áudio" : "Audio Devices");
+    ImGui::SameLine(ImGui::GetWindowWidth() - 75.0f);
+    
+    static std::vector<std::string> s_captureDevices;
+    static std::vector<std::string> s_playbackDevices;
+    static bool s_devicesLoaded = false;
+    
+    if (ImGui::SmallButton(lang == 0 ? "Atualizar" : "Refresh")) {
+        s_captureDevices = GetCaptureDeviceList();
+        s_playbackDevices = GetPlaybackDeviceList();
+        s_devicesLoaded = true;
+    }
+    
+    if (!s_devicesLoaded) {
+        s_captureDevices = GetCaptureDeviceList();
+        s_playbackDevices = GetPlaybackDeviceList();
+        s_devicesLoaded = true;
+    }
+
+    const char* currentCapture = st.capture_device;
+    const char* currentPlayback = st.playback_device;
+
+    ImGui::PushItemWidth(-1.0f);
+    
+    if (ImGui::BeginCombo("##mic_combo", currentCapture[0] == '\0' ? (lang == 0 ? "Microfone: Padrão" : "Mic: Default") : currentCapture)) {
+        bool isDefaultSelected = (currentCapture[0] == '\0');
+        if (ImGui::Selectable(lang == 0 ? "Padrão do Sistema" : "System Default", isDefaultSelected)) {
+            SetCaptureDevice("");
+        }
+        for (const auto& dev : s_captureDevices) {
+            bool isSelected = (strcmp(currentCapture, dev.c_str()) == 0);
+            if (ImGui::Selectable(dev.c_str(), isSelected)) {
+                SetCaptureDevice(dev.c_str());
+            }
+        }
+        ImGui::EndCombo();
+    }
+    
+    if (ImGui::BeginCombo("##spk_combo", currentPlayback[0] == '\0' ? (lang == 0 ? "Fone/Caixa: Padrão" : "Audio: Default") : currentPlayback)) {
+        bool isDefaultSelected = (currentPlayback[0] == '\0');
+        if (ImGui::Selectable(lang == 0 ? "Padrão do Sistema" : "System Default", isDefaultSelected)) {
+            SetPlaybackDevice("");
+        }
+        for (const auto& dev : s_playbackDevices) {
+            bool isSelected = (strcmp(currentPlayback, dev.c_str()) == 0);
+            if (ImGui::Selectable(dev.c_str(), isSelected)) {
+                SetPlaybackDevice(dev.c_str());
+            }
+        }
+        ImGui::EndCombo();
+    }
+    
+    ImGui::PopItemWidth();
 
     ImGui::Separator();
     
