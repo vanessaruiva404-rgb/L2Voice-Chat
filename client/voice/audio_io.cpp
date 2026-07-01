@@ -77,6 +77,8 @@ struct Source {
 // ---- AudioCapture ---------------------------------------------------
 
 struct AudioCapture::Impl {
+    ma_context context{};
+    bool has_context = false;
     ma_device device{};
     CaptureCallback cb;
     std::vector<int16_t> partial;  // accumulates until kFrameSamples
@@ -98,7 +100,7 @@ struct AudioCapture::Impl {
 AudioCapture::AudioCapture()  : impl_(new Impl()) {}
 AudioCapture::~AudioCapture() { Stop(); delete impl_; }
 
-bool AudioCapture::Start(const char* /*device_name*/, CaptureCallback cb) {
+bool AudioCapture::Start(const char* device_name, CaptureCallback cb) {
     if (impl_->running) return true;
     impl_->cb = std::move(cb);
     impl_->partial.reserve(kFrameSamples * 2);
@@ -109,11 +111,41 @@ bool AudioCapture::Start(const char* /*device_name*/, CaptureCallback cb) {
     cfg.sampleRate       = kSampleRate;
     cfg.dataCallback     = &Impl::DataCallback;
     cfg.pUserData        = impl_;
-    // TODO: honor device_name once we expose ma_context-based enumeration.
 
-    if (ma_device_init(nullptr, &cfg, &impl_->device) != MA_SUCCESS) return false;
+    ma_context* pContext = nullptr;
+    if (device_name && strlen(device_name) > 0) {
+        if (ma_context_init(nullptr, 0, nullptr, &impl_->context) == MA_SUCCESS) {
+            impl_->has_context = true;
+            pContext = &impl_->context;
+
+            ma_device_info* pPlaybackDeviceInfos;
+            ma_uint32 playbackDeviceCount;
+            ma_device_info* pCaptureDeviceInfos;
+            ma_uint32 captureDeviceCount;
+            if (ma_context_get_devices(pContext, &pPlaybackDeviceInfos, &playbackDeviceCount, &pCaptureDeviceInfos, &captureDeviceCount) == MA_SUCCESS) {
+                for (ma_uint32 i = 0; i < captureDeviceCount; ++i) {
+                    if (strcmp(pCaptureDeviceInfos[i].name, device_name) == 0) {
+                        cfg.capture.pDeviceID = &pCaptureDeviceInfos[i].id;
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    if (ma_device_init(pContext, &cfg, &impl_->device) != MA_SUCCESS) {
+        if (impl_->has_context) {
+            ma_context_uninit(&impl_->context);
+            impl_->has_context = false;
+        }
+        return false;
+    }
     if (ma_device_start(&impl_->device) != MA_SUCCESS) {
         ma_device_uninit(&impl_->device);
+        if (impl_->has_context) {
+            ma_context_uninit(&impl_->context);
+            impl_->has_context = false;
+        }
         return false;
     }
     impl_->running = true;
@@ -123,6 +155,10 @@ bool AudioCapture::Start(const char* /*device_name*/, CaptureCallback cb) {
 void AudioCapture::Stop() {
     if (!impl_->running) return;
     ma_device_uninit(&impl_->device);
+    if (impl_->has_context) {
+        ma_context_uninit(&impl_->context);
+        impl_->has_context = false;
+    }
     impl_->running = false;
     impl_->partial.clear();
 }
@@ -139,6 +175,8 @@ bool AudioCapture::IsRunning() const { return impl_->running; }
 constexpr uint32_t kAecRefRingSamples = kFrameSamples * 10;
 
 struct AudioPlayback::Impl {
+    ma_context context{};
+    bool has_context = false;
     ma_device device{};
     std::mutex sources_mu;
     std::unordered_map<uint32_t, Source> sources;
@@ -216,7 +254,7 @@ struct AudioPlayback::Impl {
 AudioPlayback::AudioPlayback()  : impl_(new Impl()) {}
 AudioPlayback::~AudioPlayback() { Stop(); delete impl_; }
 
-bool AudioPlayback::Start(const char* /*device_name*/) {
+bool AudioPlayback::Start(const char* device_name) {
     if (impl_->running) return true;
     ma_device_config cfg = ma_device_config_init(ma_device_type_playback);
     cfg.playback.format   = ma_format_s16;
@@ -224,9 +262,41 @@ bool AudioPlayback::Start(const char* /*device_name*/) {
     cfg.sampleRate        = kSampleRate;
     cfg.dataCallback      = &Impl::DataCallback;
     cfg.pUserData         = impl_;
-    if (ma_device_init(nullptr, &cfg, &impl_->device) != MA_SUCCESS) return false;
+
+    ma_context* pContext = nullptr;
+    if (device_name && strlen(device_name) > 0) {
+        if (ma_context_init(nullptr, 0, nullptr, &impl_->context) == MA_SUCCESS) {
+            impl_->has_context = true;
+            pContext = &impl_->context;
+
+            ma_device_info* pPlaybackDeviceInfos;
+            ma_uint32 playbackDeviceCount;
+            ma_device_info* pCaptureDeviceInfos;
+            ma_uint32 captureDeviceCount;
+            if (ma_context_get_devices(pContext, &pPlaybackDeviceInfos, &playbackDeviceCount, &pCaptureDeviceInfos, &captureDeviceCount) == MA_SUCCESS) {
+                for (ma_uint32 i = 0; i < playbackDeviceCount; ++i) {
+                    if (strcmp(pPlaybackDeviceInfos[i].name, device_name) == 0) {
+                        cfg.playback.pDeviceID = &pPlaybackDeviceInfos[i].id;
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    if (ma_device_init(pContext, &cfg, &impl_->device) != MA_SUCCESS) {
+        if (impl_->has_context) {
+            ma_context_uninit(&impl_->context);
+            impl_->has_context = false;
+        }
+        return false;
+    }
     if (ma_device_start(&impl_->device) != MA_SUCCESS) {
         ma_device_uninit(&impl_->device);
+        if (impl_->has_context) {
+            ma_context_uninit(&impl_->context);
+            impl_->has_context = false;
+        }
         return false;
     }
     impl_->running = true;
@@ -236,6 +306,10 @@ bool AudioPlayback::Start(const char* /*device_name*/) {
 void AudioPlayback::Stop() {
     if (!impl_->running) return;
     ma_device_uninit(&impl_->device);
+    if (impl_->has_context) {
+        ma_context_uninit(&impl_->context);
+        impl_->has_context = false;
+    }
     impl_->running = false;
     std::lock_guard<std::mutex> lk(impl_->sources_mu);
     impl_->sources.clear();
@@ -358,6 +432,42 @@ void AudioPlayback::PopPlaybackReference(int16_t* dst, uint32_t samples) {
     for (uint32_t i = 0; i < samples; ++i) {
         dst[i] = impl_->aec_ref[(start + i) % kAecRefRingSamples];
     }
+}
+
+std::vector<std::string> EnumerateCaptureDevices() {
+    std::vector<std::string> list;
+    ma_context context;
+    if (ma_context_init(nullptr, 0, nullptr, &context) == MA_SUCCESS) {
+        ma_device_info* pPlaybackDeviceInfos;
+        ma_uint32 playbackDeviceCount;
+        ma_device_info* pCaptureDeviceInfos;
+        ma_uint32 captureDeviceCount;
+        if (ma_context_get_devices(&context, &pPlaybackDeviceInfos, &playbackDeviceCount, &pCaptureDeviceInfos, &captureDeviceCount) == MA_SUCCESS) {
+            for (ma_uint32 i = 0; i < captureDeviceCount; ++i) {
+                list.push_back(pCaptureDeviceInfos[i].name);
+            }
+        }
+        ma_context_uninit(&context);
+    }
+    return list;
+}
+
+std::vector<std::string> EnumeratePlaybackDevices() {
+    std::vector<std::string> list;
+    ma_context context;
+    if (ma_context_init(nullptr, 0, nullptr, &context) == MA_SUCCESS) {
+        ma_device_info* pPlaybackDeviceInfos;
+        ma_uint32 playbackDeviceCount;
+        ma_device_info* pCaptureDeviceInfos;
+        ma_uint32 captureDeviceCount;
+        if (ma_context_get_devices(&context, &pPlaybackDeviceInfos, &playbackDeviceCount, &pCaptureDeviceInfos, &captureDeviceCount) == MA_SUCCESS) {
+            for (ma_uint32 i = 0; i < playbackDeviceCount; ++i) {
+                list.push_back(pPlaybackDeviceInfos[i].name);
+            }
+        }
+        ma_context_uninit(&context);
+    }
+    return list;
 }
 
 }  // namespace voice
