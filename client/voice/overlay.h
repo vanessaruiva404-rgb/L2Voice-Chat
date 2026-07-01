@@ -11,6 +11,8 @@
 #pragma once
 
 #include <cstdint>
+#include <vector>
+#include <string>
 
 void Logf(const char* fmt, ...);
 
@@ -45,6 +47,8 @@ struct OverlayState {
     bool     ch_enabled[4];
     float    ch_volume[4];      // 0..2
     char     char_name[64];
+    char     capture_device[128];
+    char     playback_device[128];
 };
 
 OverlayState SnapshotOverlayState();
@@ -62,6 +66,10 @@ int  GetPttPartyVk();
 int  GetPttClanVk();
 int  GetPttAllyVk();
 void SetMasterVolume(float gain);
+void SetCaptureDevice(const char* name);
+void SetPlaybackDevice(const char* name);
+std::vector<std::string> GetCaptureDeviceList();
+std::vector<std::string> GetPlaybackDeviceList();
 
 // Per-channel listening prefs (Prompt §Fase C wire: set_channel_*).
 // Updates the local state, persists to voice.ini, and forwards to the
