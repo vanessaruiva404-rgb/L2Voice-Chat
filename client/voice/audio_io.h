@@ -13,8 +13,13 @@
 
 #include <cstdint>
 #include <functional>
+#include <vector>
+#include <string>
 
 namespace voice {
+
+std::vector<std::string> EnumerateCaptureDevices();
+std::vector<std::string> EnumeratePlaybackDevices();
 
 // ---- Capture ---------------------------------------------------------
 
