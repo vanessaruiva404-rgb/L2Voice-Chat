@@ -100,6 +100,11 @@ void OnRenderFrame();
 // Called when the L2 token has been obtained (Phase 4 will hook into
 // L2J's chat broadcast / packet path). For now this is a manual entry
 // in the overlay settings UI.
+void SetCaptureDevice(const char* name);
+void SetPlaybackDevice(const char* name);
+void GetCaptureDevice(char* out, size_t cap);
+void GetPlaybackDevice(char* out, size_t cap);
+
 void SetAuthToken(const char* token, uint32_t player_id);
 
 bool IsPlayerMuted(uint32_t player_id);
