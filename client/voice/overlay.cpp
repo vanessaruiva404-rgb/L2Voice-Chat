@@ -1547,26 +1547,35 @@ void DrawMinimizedSpeakerList() {
     if (ping < 0) ImGui::TextColored(pingCol, "--");
     else          ImGui::TextColored(pingCol, "%d ms", ping);
 
-    // Calculate space needed for support button
+    // Calculate space needed for support button.
+    // Priority order:
+    //   1. st.char_name — set directly by the server on auth (most reliable,
+    //      always up-to-date after re-login).
+    //   2. Speaker session cache — async query, may lag by ~50 ms on first
+    //      login, used only as a fallback when char_name is not yet populated.
     char localName[64] = {0};
-    GetSpeakerName(st.session_id, localName, sizeof(localName));
-    if (localName[0] == '\0') {
+    if (st.char_name[0] != '\0') {
         std::strncpy(localName, st.char_name, sizeof(localName) - 1);
+    } else {
+        // char_name not populated yet — try the per-session voice cache.
+        GetSpeakerName(st.session_id, localName, sizeof(localName));
     }
 
-    bool isGm = false;
-    if (_strnicmp(localName, "GM ", 3) == 0 ||
-        _strnicmp(localName, "GM-", 3) == 0 ||
-        _strnicmp(localName, "Admin ", 6) == 0 ||
-        _strnicmp(localName, "[GM]", 4) == 0 ||
-        _strnicmp(localName, "(GM)", 4) == 0 ||
-        _strnicmp(localName, "ADM ", 4) == 0 ||
-        _strnicmp(localName, "ADM-", 4) == 0 ||
-        _strnicmp(localName, "[ADM]", 5) == 0 ||
-        _strnicmp(localName, "(ADM)", 5) == 0 ||
-        _strnicmp(localName, "Staff ", 6) == 0) {
-        isGm = true;
-    }
+    auto IsAdminName = [](const char* name) -> bool {
+        if (!name || !name[0]) return false;
+        return (_strnicmp(name, "GM ",   3) == 0 ||
+                _strnicmp(name, "GM-",   3) == 0 ||
+                _strnicmp(name, "Admin ",6) == 0 ||
+                _strnicmp(name, "[GM]",  4) == 0 ||
+                _strnicmp(name, "(GM)",  4) == 0 ||
+                _strnicmp(name, "ADM ",  4) == 0 ||
+                _strnicmp(name, "ADM-",  4) == 0 ||
+                _strnicmp(name, "[ADM]", 5) == 0 ||
+                _strnicmp(name, "(ADM)", 5) == 0 ||
+                _strnicmp(name, "Staff ",6) == 0);
+    };
+
+    bool isGm = IsAdminName(localName);
     const char* supportLabel = isGm ? "Admin" : (lang == 0 ? "Falar com ADM" : "Contact Admin");
     float supportBtnW = ImGui::CalcTextSize(supportLabel).x + 12.0f;
 
@@ -1913,9 +1922,12 @@ void PollSupportDataAsync(uint32_t player_id, bool isGm) {
         args->connectTimeout = 2;
         args->transferTimeout = 2;
         
+        Logf("[l2voice] PollSupportDataAsync: player_id=%u isGm=%d baseUrl=%s\n", player_id, isGm, baseUrl.c_str());
+        
         if (!isGm) {
             std::string url = baseUrl + "/support/chat?player_id=" + std::to_string(player_id);
             auto response = httpClient.get(url, args);
+            Logf("[l2voice] PollSupport GET player chat response: statusCode=%d\n", response->statusCode);
             if (response->statusCode == 200) {
                 std::string body = response->body;
                 SupportChatData chat;
@@ -1942,10 +1954,13 @@ void PollSupportDataAsync(uint32_t player_id, bool isGm) {
             }
         } else {
             // GM mode: poll tickets
+            bool success = false;
             {
                 std::string url = baseUrl + "/support/admin/tickets?player_id=" + std::to_string(player_id);
                 auto response = httpClient.get(url, args);
+                Logf("[l2voice] PollSupport GET admin tickets response: statusCode=%d\n", response->statusCode);
                 if (response->statusCode == 200) {
+                    success = true;
                     std::string body = response->body;
                     std::vector<AdminTicket> list;
                     auto items = JsonExtractArray("{\"items\":" + body + "}", "items");
@@ -1961,109 +1976,119 @@ void PollSupportDataAsync(uint32_t player_id, bool isGm) {
                     }
                     std::lock_guard<std::mutex> lk(g_supportMu);
                     g_adminTickets = list;
+                    g_supportError = "";
+                } else {
+                    std::lock_guard<std::mutex> lk(g_supportMu);
+                    g_supportError = "Conexao offline.";
                 }
             }
             
-            // active GM chat
-            int activeChatId = 0;
-            {
-                std::lock_guard<std::mutex> lk(g_supportMu);
-                activeChatId = g_adminSelectedChatId;
-            }
-            if (activeChatId > 0) {
-                std::string url = baseUrl + "/support/chat?player_id=" + std::to_string(player_id) + "&chat_id=" + std::to_string(activeChatId);
-                auto response = httpClient.get(url, args);
-                if (response->statusCode == 200) {
-                    std::string body = response->body;
-                    SupportChatData chat;
-                    chat.id = (int)JsonExtractInt(body, "chat_id");
-                    chat.status = (int)JsonExtractInt(body, "status");
-                    chat.unread_by_player = JsonExtractInt(body, "unread_by_player") == 1;
-                    
-                    auto msgs = JsonExtractArray(body, "messages");
-                    for (const auto& item : msgs) {
-                        SupportMsg m;
-                        m.sender = JsonExtractString(item, "sender");
-                        m.is_admin = JsonExtractInt(item, "is_admin") == 1;
-                        m.message = JsonExtractString(item, "message");
-                        m.timestamp = JsonExtractInt(item, "timestamp");
-                        chat.messages.push_back(m);
-                    }
+            if (success) {
+                // active GM chat
+                int activeChatId = 0;
+                {
                     std::lock_guard<std::mutex> lk(g_supportMu);
-                    g_adminActiveChat = chat;
+                    activeChatId = g_adminSelectedChatId;
                 }
-            }
-            
-            // staff group
-            {
-                std::string url = baseUrl + "/support/admin/group?player_id=" + std::to_string(player_id);
-                auto response = httpClient.get(url, args);
-                if (response->statusCode == 200) {
-                    std::string body = response->body;
-                    std::vector<AdminGroupMsg> list;
-                    auto items = JsonExtractArray("{\"items\":" + body + "}", "items");
-                    for (const auto& item : items) {
-                        AdminGroupMsg m;
-                        m.sender = JsonExtractString(item, "sender");
-                        m.message = JsonExtractString(item, "message");
-                        m.timestamp = JsonExtractInt(item, "timestamp");
-                        list.push_back(m);
+                if (activeChatId > 0) {
+                    std::string url = baseUrl + "/support/chat?player_id=" + std::to_string(player_id) + "&chat_id=" + std::to_string(activeChatId);
+                    auto response = httpClient.get(url, args);
+                    Logf("[l2voice] PollSupport GET admin active chat response: statusCode=%d\n", response->statusCode);
+                    if (response->statusCode == 200) {
+                        std::string body = response->body;
+                        SupportChatData chat;
+                        chat.id = (int)JsonExtractInt(body, "chat_id");
+                        chat.status = (int)JsonExtractInt(body, "status");
+                        chat.unread_by_player = JsonExtractInt(body, "unread_by_player") == 1;
+                        
+                        auto msgs = JsonExtractArray(body, "messages");
+                        for (const auto& item : msgs) {
+                            SupportMsg m;
+                            m.sender = JsonExtractString(item, "sender");
+                            m.is_admin = JsonExtractInt(item, "is_admin") == 1;
+                            m.message = JsonExtractString(item, "message");
+                            m.timestamp = JsonExtractInt(item, "timestamp");
+                            chat.messages.push_back(m);
+                        }
+                        std::lock_guard<std::mutex> lk(g_supportMu);
+                        g_adminActiveChat = chat;
                     }
-                    std::lock_guard<std::mutex> lk(g_supportMu);
-                    g_adminGroupMsgs = list;
                 }
-            }
-            
-            // bugs
-            {
-                std::string url = baseUrl + "/support/admin/bugs?player_id=" + std::to_string(player_id);
-                auto response = httpClient.get(url, args);
-                if (response->statusCode == 200) {
-                    std::string body = response->body;
-                    std::vector<BugReportData> list;
-                    auto items = JsonExtractArray("{\"items\":" + body + "}", "items");
-                    for (const auto& item : items) {
-                        BugReportData b;
-                        b.bug_id = (int)JsonExtractInt(item, "bug_id");
-                        b.title = JsonExtractString(item, "title");
-                        b.description = JsonExtractString(item, "description");
-                        b.reporter = JsonExtractString(item, "reporter");
-                        b.category = (int)JsonExtractInt(item, "category");
-                        b.priority = (int)JsonExtractInt(item, "priority");
-                        b.assigned_to = (int)JsonExtractInt(item, "assigned_to");
-                        b.status = (int)JsonExtractInt(item, "status");
-                        b.created_at = JsonExtractInt(item, "created_at");
-                        b.last_updated = JsonExtractInt(item, "last_updated");
-                        list.push_back(b);
+                
+                // staff group
+                {
+                    std::string url = baseUrl + "/support/admin/group?player_id=" + std::to_string(player_id);
+                    auto response = httpClient.get(url, args);
+                    Logf("[l2voice] PollSupport GET admin group chat response: statusCode=%d\n", response->statusCode);
+                    if (response->statusCode == 200) {
+                        std::string body = response->body;
+                        std::vector<AdminGroupMsg> list;
+                        auto items = JsonExtractArray("{\"items\":" + body + "}", "items");
+                        for (const auto& item : items) {
+                            AdminGroupMsg m;
+                            m.sender = JsonExtractString(item, "sender");
+                            m.message = JsonExtractString(item, "message");
+                            m.timestamp = JsonExtractInt(item, "timestamp");
+                            list.push_back(m);
+                        }
+                        std::lock_guard<std::mutex> lk(g_supportMu);
+                        g_adminGroupMsgs = list;
                     }
-                    std::lock_guard<std::mutex> lk(g_supportMu);
-                    g_bugReports = list;
                 }
-            }
-            
-            // bug comments
-            int activeBugId = 0;
-            {
-                std::lock_guard<std::mutex> lk(g_supportMu);
-                activeBugId = g_adminSelectedBugId;
-            }
-            if (activeBugId > 0) {
-                std::string url = baseUrl + "/support/admin/bugs?player_id=" + std::to_string(player_id) + "&bug_id=" + std::to_string(activeBugId);
-                auto response = httpClient.get(url, args);
-                if (response->statusCode == 200) {
-                    std::string body = response->body;
-                    std::vector<BugCommentData> list;
-                    auto items = JsonExtractArray("{\"items\":" + body + "}", "items");
-                    for (const auto& item : items) {
-                        BugCommentData c;
-                        c.comment_id = (int)JsonExtractInt(item, "comment_id");
-                        c.sender = JsonExtractString(item, "sender");
-                        c.comment = JsonExtractString(item, "comment");
-                        c.timestamp = JsonExtractInt(item, "timestamp");
-                        list.push_back(c);
+                
+                // bugs
+                {
+                    std::string url = baseUrl + "/support/admin/bugs?player_id=" + std::to_string(player_id);
+                    auto response = httpClient.get(url, args);
+                    Logf("[l2voice] PollSupport GET admin bug reports response: statusCode=%d\n", response->statusCode);
+                    if (response->statusCode == 200) {
+                        std::string body = response->body;
+                        std::vector<BugReportData> list;
+                        auto items = JsonExtractArray("{\"items\":" + body + "}", "items");
+                        for (const auto& item : items) {
+                            BugReportData b;
+                            b.bug_id = (int)JsonExtractInt(item, "bug_id");
+                            b.title = JsonExtractString(item, "title");
+                            b.description = JsonExtractString(item, "description");
+                            b.reporter = JsonExtractString(item, "reporter");
+                            b.category = (int)JsonExtractInt(item, "category");
+                            b.priority = (int)JsonExtractInt(item, "priority");
+                            b.assigned_to = (int)JsonExtractInt(item, "assigned_to");
+                            b.status = (int)JsonExtractInt(item, "status");
+                            b.created_at = JsonExtractInt(item, "created_at");
+                            b.last_updated = JsonExtractInt(item, "last_updated");
+                            list.push_back(b);
+                        }
+                        std::lock_guard<std::mutex> lk(g_supportMu);
+                        g_bugReports = list;
                     }
+                }
+                
+                // bug comments
+                int activeBugId = 0;
+                {
                     std::lock_guard<std::mutex> lk(g_supportMu);
-                    g_bugComments = list;
+                    activeBugId = g_adminSelectedBugId;
+                }
+                if (activeBugId > 0) {
+                    std::string url = baseUrl + "/support/admin/bugs?player_id=" + std::to_string(player_id) + "&bug_id=" + std::to_string(activeBugId);
+                    auto response = httpClient.get(url, args);
+                    Logf("[l2voice] PollSupport GET admin bug comments response: statusCode=%d\n", response->statusCode);
+                    if (response->statusCode == 200) {
+                        std::string body = response->body;
+                        std::vector<BugCommentData> list;
+                        auto items = JsonExtractArray("{\"items\":" + body + "}", "items");
+                        for (const auto& item : items) {
+                            BugCommentData c;
+                            c.comment_id = (int)JsonExtractInt(item, "comment_id");
+                            c.sender = JsonExtractString(item, "sender");
+                            c.comment = JsonExtractString(item, "comment");
+                            c.timestamp = JsonExtractInt(item, "timestamp");
+                            list.push_back(c);
+                        }
+                        std::lock_guard<std::mutex> lk(g_supportMu);
+                        g_bugComments = list;
+                    }
                 }
             }
         }
@@ -2073,6 +2098,7 @@ void PollSupportDataAsync(uint32_t player_id, bool isGm) {
 }
 
 void SendPlayerMessageAsync(uint32_t player_id, const std::string& message) {
+    Logf("[l2voice] SendPlayerMessageAsync: player_id=%u message=%s\n", player_id, message.c_str());
     std::thread([player_id, message]() {
         char host[128] = {0};
         voice::GetVoiceServerHost(host, sizeof(host));
@@ -2084,6 +2110,7 @@ void SendPlayerMessageAsync(uint32_t player_id, const std::string& message) {
         args->transferTimeout = 5;
         std::string body = "{\"player_id\":" + std::to_string(player_id) + ",\"message\":\"" + escapeJSON(message) + "\"}";
         auto response = httpClient.post(url, body, args);
+        Logf("[l2voice] SendPlayerMessageAsync POST response: statusCode=%d\n", response->statusCode);
         if (response->statusCode == 200) {
             g_lastPollMs = 0;
         }
@@ -2091,6 +2118,7 @@ void SendPlayerMessageAsync(uint32_t player_id, const std::string& message) {
 }
 
 void SendReportBugAsync(uint32_t player_id, const std::string& title, const std::string& desc, int cat, int prio) {
+    Logf("[l2voice] SendReportBugAsync: player_id=%u title=%s\n", player_id, title.c_str());
     std::thread([player_id, title, desc, cat, prio]() {
         char host[128] = {0};
         voice::GetVoiceServerHost(host, sizeof(host));
@@ -2106,6 +2134,7 @@ void SendReportBugAsync(uint32_t player_id, const std::string& title, const std:
                            "\",\"category\":" + std::to_string(cat) + 
                            ",\"priority\":" + std::to_string(prio) + "}";
         auto response = httpClient.post(url, body, args);
+        Logf("[l2voice] SendReportBugAsync POST response: statusCode=%d\n", response->statusCode);
         std::lock_guard<std::mutex> lk(g_supportMu);
         if (response->statusCode == 200) {
             g_supportSuccessMsg = "Bug reportado!";
@@ -2117,6 +2146,7 @@ void SendReportBugAsync(uint32_t player_id, const std::string& title, const std:
 }
 
 void SendAdminReplyAsync(uint32_t player_id, int chat_id, const std::string& message) {
+    Logf("[l2voice] SendAdminReplyAsync: player_id=%u chat_id=%d message=%s\n", player_id, chat_id, message.c_str());
     std::thread([player_id, chat_id, message]() {
         char host[128] = {0};
         voice::GetVoiceServerHost(host, sizeof(host));
@@ -2130,6 +2160,7 @@ void SendAdminReplyAsync(uint32_t player_id, int chat_id, const std::string& mes
                            ",\"chat_id\":" + std::to_string(chat_id) + 
                            ",\"message\":\"" + escapeJSON(message) + "\"}";
         auto response = httpClient.post(url, body, args);
+        Logf("[l2voice] SendAdminReplyAsync POST response: statusCode=%d\n", response->statusCode);
         if (response->statusCode == 200) {
             g_lastPollMs = 0;
         }
@@ -2137,6 +2168,7 @@ void SendAdminReplyAsync(uint32_t player_id, int chat_id, const std::string& mes
 }
 
 void SendAdminCloseChatAsync(uint32_t player_id, int chat_id) {
+    Logf("[l2voice] SendAdminCloseChatAsync: player_id=%u chat_id=%d\n", player_id, chat_id);
     std::thread([player_id, chat_id]() {
         char host[128] = {0};
         voice::GetVoiceServerHost(host, sizeof(host));
@@ -2149,6 +2181,7 @@ void SendAdminCloseChatAsync(uint32_t player_id, int chat_id) {
         std::string body = "{\"player_id\":" + std::to_string(player_id) + 
                            ",\"chat_id\":" + std::to_string(chat_id) + "}";
         auto response = httpClient.post(url, body, args);
+        Logf("[l2voice] SendAdminCloseChatAsync POST response: statusCode=%d\n", response->statusCode);
         if (response->statusCode == 200) {
             g_lastPollMs = 0;
         }
@@ -2156,6 +2189,7 @@ void SendAdminCloseChatAsync(uint32_t player_id, int chat_id) {
 }
 
 void SendAdminReopenChatAsync(uint32_t player_id, int chat_id) {
+    Logf("[l2voice] SendAdminReopenChatAsync: player_id=%u chat_id=%d\n", player_id, chat_id);
     std::thread([player_id, chat_id]() {
         char host[128] = {0};
         voice::GetVoiceServerHost(host, sizeof(host));
@@ -2168,6 +2202,7 @@ void SendAdminReopenChatAsync(uint32_t player_id, int chat_id) {
         std::string body = "{\"player_id\":" + std::to_string(player_id) + 
                            ",\"chat_id\":" + std::to_string(chat_id) + "}";
         auto response = httpClient.post(url, body, args);
+        Logf("[l2voice] SendAdminReopenChatAsync POST response: statusCode=%d\n", response->statusCode);
         if (response->statusCode == 200) {
             g_lastPollMs = 0;
         }
@@ -2175,6 +2210,7 @@ void SendAdminReopenChatAsync(uint32_t player_id, int chat_id) {
 }
 
 void SendAdminGroupMsgAsync(uint32_t player_id, const std::string& message) {
+    Logf("[l2voice] SendAdminGroupMsgAsync: player_id=%u message=%s\n", player_id, message.c_str());
     std::thread([player_id, message]() {
         char host[128] = {0};
         voice::GetVoiceServerHost(host, sizeof(host));
@@ -2187,6 +2223,7 @@ void SendAdminGroupMsgAsync(uint32_t player_id, const std::string& message) {
         std::string body = "{\"player_id\":" + std::to_string(player_id) + 
                            ",\"message\":\"" + escapeJSON(message) + "\"}";
         auto response = httpClient.post(url, body, args);
+        Logf("[l2voice] SendAdminGroupMsgAsync POST response: statusCode=%d\n", response->statusCode);
         if (response->statusCode == 200) {
             g_lastPollMs = 0;
         }
@@ -2194,6 +2231,7 @@ void SendAdminGroupMsgAsync(uint32_t player_id, const std::string& message) {
 }
 
 void SendBugCommentAsync(uint32_t player_id, int bug_id, const std::string& comment) {
+    Logf("[l2voice] SendBugCommentAsync: player_id=%u bug_id=%d comment=%s\n", player_id, bug_id, comment.c_str());
     std::thread([player_id, bug_id, comment]() {
         char host[128] = {0};
         voice::GetVoiceServerHost(host, sizeof(host));
@@ -2207,6 +2245,7 @@ void SendBugCommentAsync(uint32_t player_id, int bug_id, const std::string& comm
                            ",\"bug_id\":" + std::to_string(bug_id) + 
                            ",\"comment\":\"" + escapeJSON(comment) + "\"}";
         auto response = httpClient.post(url, body, args);
+        Logf("[l2voice] SendBugCommentAsync POST response: statusCode=%d\n", response->statusCode);
         if (response->statusCode == 200) {
             g_lastPollMs = 0;
         }
@@ -2214,6 +2253,7 @@ void SendBugCommentAsync(uint32_t player_id, int bug_id, const std::string& comm
 }
 
 void SendBugUpdateAsync(uint32_t player_id, int bug_id, int status, int priority, int category) {
+    Logf("[l2voice] SendBugUpdateAsync: player_id=%u bug_id=%d status=%d priority=%d category=%d\n", player_id, bug_id, status, priority, category);
     std::thread([player_id, bug_id, status, priority, category]() {
         char host[128] = {0};
         voice::GetVoiceServerHost(host, sizeof(host));
@@ -2229,6 +2269,7 @@ void SendBugUpdateAsync(uint32_t player_id, int bug_id, int status, int priority
                            ",\"priority\":" + std::to_string(priority) + 
                            ",\"category\":" + std::to_string(category) + "}";
         auto response = httpClient.post(url, body, args);
+        Logf("[l2voice] SendBugUpdateAsync POST response: statusCode=%d\n", response->statusCode);
         if (response->statusCode == 200) {
             g_lastPollMs = 0;
         }
@@ -2241,24 +2282,28 @@ void DrawSupportWindow() {
     OverlayState st = SnapshotOverlayState();
     
     char localName[64] = {0};
-    GetSpeakerName(st.session_id, localName, sizeof(localName));
-    if (localName[0] == '\0') {
+    // Prefer char_name (set directly by server auth) over async session cache.
+    if (st.char_name[0] != '\0') {
         std::strncpy(localName, st.char_name, sizeof(localName) - 1);
+    } else {
+        GetSpeakerName(st.session_id, localName, sizeof(localName));
     }
     
-    bool isGm = false;
-    if (_strnicmp(localName, "GM ", 3) == 0 ||
-        _strnicmp(localName, "GM-", 3) == 0 ||
-        _strnicmp(localName, "Admin ", 6) == 0 ||
-        _strnicmp(localName, "[GM]", 4) == 0 ||
-        _strnicmp(localName, "(GM)", 4) == 0 ||
-        _strnicmp(localName, "ADM ", 4) == 0 ||
-        _strnicmp(localName, "ADM-", 4) == 0 ||
-        _strnicmp(localName, "[ADM]", 5) == 0 ||
-        _strnicmp(localName, "(ADM)", 5) == 0 ||
-        _strnicmp(localName, "Staff ", 6) == 0) {
-        isGm = true;
-    }
+    auto IsAdminName = [](const char* name) -> bool {
+        if (!name || !name[0]) return false;
+        return (_strnicmp(name, "GM ",   3) == 0 ||
+                _strnicmp(name, "GM-",   3) == 0 ||
+                _strnicmp(name, "Admin ",6) == 0 ||
+                _strnicmp(name, "[GM]",  4) == 0 ||
+                _strnicmp(name, "(GM)",  4) == 0 ||
+                _strnicmp(name, "ADM ",  4) == 0 ||
+                _strnicmp(name, "ADM-",  4) == 0 ||
+                _strnicmp(name, "[ADM]", 5) == 0 ||
+                _strnicmp(name, "(ADM)", 5) == 0 ||
+                _strnicmp(name, "Staff ",6) == 0);
+    };
+
+    bool isGm = IsAdminName(localName);
     
     PollSupportDataAsync(st.player_id, isGm);
     
