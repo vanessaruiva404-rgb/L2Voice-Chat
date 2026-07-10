@@ -560,11 +560,6 @@ void SetIniPath(const wchar_t* path) {
     wcsncpy_s(g_mod.ini_path, MAX_PATH, path, MAX_PATH - 1);
 }
 
-static void IniWriteString(const wchar_t* key, const wchar_t* value) {
-    if (g_mod.ini_path[0] == 0) return;
-    WritePrivateProfileStringW(L"voice", key, value, g_mod.ini_path);
-}
-
 // Writes an integer key to [voice] in voice.ini. Cheap: WinAPI does
 // the parse/replace/write internally.
 static void IniWriteInt(const wchar_t* key, int value) {
@@ -572,44 +567,6 @@ static void IniWriteInt(const wchar_t* key, int value) {
     wchar_t buf[32];
     swprintf_s(buf, L"%d", value);
     WritePrivateProfileStringW(L"voice", key, buf, g_mod.ini_path);
-}
-
-void SetCaptureDevice(const char* name) {
-    std::strncpy(g_mod.cfg.capture_device, name, sizeof(g_mod.cfg.capture_device) - 1);
-    g_mod.cfg.capture_device[sizeof(g_mod.cfg.capture_device) - 1] = 0;
-    
-    wchar_t wname[128];
-    size_t dummy = 0;
-    mbstowcs_s(&dummy, wname, name, _TRUNCATE);
-    IniWriteString(L"capture_device", wname);
-    
-    if (g_mod.running.load()) {
-        g_mod.capture.Stop();
-        g_mod.capture.Start(g_mod.cfg.capture_device, &OnCaptureFrame);
-    }
-}
-
-void SetPlaybackDevice(const char* name) {
-    std::strncpy(g_mod.cfg.playback_device, name, sizeof(g_mod.cfg.playback_device) - 1);
-    g_mod.cfg.playback_device[sizeof(g_mod.cfg.playback_device) - 1] = 0;
-    
-    wchar_t wname[128];
-    size_t dummy = 0;
-    mbstowcs_s(&dummy, wname, name, _TRUNCATE);
-    IniWriteString(L"playback_device", wname);
-    
-    if (g_mod.running.load()) {
-        g_mod.playback.Stop();
-        g_mod.playback.Start(g_mod.cfg.playback_device);
-    }
-}
-
-std::vector<std::string> GetCaptureDeviceList() {
-    return EnumerateCaptureDevices();
-}
-
-std::vector<std::string> GetPlaybackDeviceList() {
-    return EnumeratePlaybackDevices();
 }
 
 static int IniReadInt(const wchar_t* key, int fallback) {
@@ -807,10 +764,6 @@ OverlayState SnapshotOverlayState() {
     }
     std::strncpy(s.char_name, g_mod.cfg.char_name, sizeof(s.char_name) - 1);
     s.char_name[sizeof(s.char_name) - 1] = 0;
-    std::strncpy(s.capture_device, g_mod.cfg.capture_device, sizeof(s.capture_device) - 1);
-    s.capture_device[sizeof(s.capture_device) - 1] = 0;
-    std::strncpy(s.playback_device, g_mod.cfg.playback_device, sizeof(s.playback_device) - 1);
-    s.playback_device[sizeof(s.playback_device) - 1] = 0;
     return s;
 }
 
@@ -1007,6 +960,55 @@ void GetMicIconPos(int* x, int* y) {
 void SaveMicIconPos(int x, int y) {
     IniWriteInt(L"mic_icon_x", x);
     IniWriteInt(L"mic_icon_y", y);
+}
+
+void SetCaptureDevice(const char* name) {
+    if (!name) return;
+    std::strncpy(g_mod.cfg.capture_device, name, sizeof(g_mod.cfg.capture_device) - 1);
+    g_mod.cfg.capture_device[sizeof(g_mod.cfg.capture_device) - 1] = 0;
+    
+    if (g_mod.ini_path[0] != 0) {
+        wchar_t wName[128] = {0};
+        size_t converted = 0;
+        mbstowcs_s(&converted, wName, name, 127);
+        WritePrivateProfileStringW(L"voice", L"capture_device", wName, g_mod.ini_path);
+    }
+    
+    if (g_mod.capture.IsRunning()) {
+        g_mod.capture.Stop();
+        g_mod.capture.Start(g_mod.cfg.capture_device, &OnCaptureFrame);
+    }
+}
+
+void SetPlaybackDevice(const char* name) {
+    if (!name) return;
+    std::strncpy(g_mod.cfg.playback_device, name, sizeof(g_mod.cfg.playback_device) - 1);
+    g_mod.cfg.playback_device[sizeof(g_mod.cfg.playback_device) - 1] = 0;
+    
+    if (g_mod.ini_path[0] != 0) {
+        wchar_t wName[128] = {0};
+        size_t converted = 0;
+        mbstowcs_s(&converted, wName, name, 127);
+        WritePrivateProfileStringW(L"voice", L"playback_device", wName, g_mod.ini_path);
+    }
+    
+    if (g_mod.playback.IsRunning()) {
+        g_mod.playback.Stop();
+        g_mod.playback.Start(g_mod.cfg.playback_device);
+        g_mod.playback.SetMasterVolume(g_mod.cfg.master_volume);
+    }
+}
+
+void GetCaptureDevice(char* out, size_t cap) {
+    if (!out || cap == 0) return;
+    std::strncpy(out, g_mod.cfg.capture_device, cap - 1);
+    out[cap - 1] = 0;
+}
+
+void GetPlaybackDevice(char* out, size_t cap) {
+    if (!out || cap == 0) return;
+    std::strncpy(out, g_mod.cfg.playback_device, cap - 1);
+    out[cap - 1] = 0;
 }
 
 void SetAuthToken(const char* /*token*/, uint32_t /*player_id*/) {
