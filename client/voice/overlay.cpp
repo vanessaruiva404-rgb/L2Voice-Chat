@@ -35,6 +35,11 @@
 #include <cstdarg>
 #include <cstdio>
 #include <mutex>
+#include <future>
+#include <vector>
+#include <string>
+#include <ixwebsocket/IXHttpClient.h>
+#include <ixwebsocket/IXHttp.h>
 
 #define STB_IMAGE_IMPLEMENTATION
 #define STBI_NO_HDR
@@ -1579,14 +1584,7 @@ void DrawMinimizedSpeakerList() {
     
     // Render the button (18.0f height to match the text line nicely)
     if (ImGui::Button(supportLabel, ImVec2(supportBtnW, 18.0f))) {
-        typedef void (*SendBypassToServerFn)(const wchar_t* bypass);
-        HMODULE hDsetup = GetModuleHandleW(L"dsetup.dll");
-        if (hDsetup) {
-            SendBypassToServerFn pfnSendBypass = (SendBypassToServerFn)GetProcAddress(hDsetup, "SendBypassToServer");
-            if (pfnSendBypass) {
-                pfnSendBypass(L"suporte");
-            }
-        }
+        SetSupportWindowOpen(!IsSupportWindowOpen());
     }
     ImGui::PopStyleColor(3);
 
@@ -1717,6 +1715,909 @@ void DrawMinimizedSpeakerList() {
     ImGui::PopStyleColor(2);
 }
 
+std::string JsonExtractString(const std::string& json, const std::string& key) {
+    std::string search = "\"" + key + "\":\"";
+    size_t pos = json.find(search);
+    if (pos == std::string::npos) {
+        search = "\"" + key + "\":";
+        pos = json.find(search);
+        if (pos == std::string::npos) return "";
+        pos += search.length();
+        while (pos < json.length() && (json[pos] == ' ' || json[pos] == '"')) {
+            pos++;
+        }
+        size_t end = pos;
+        while (end < json.length() && json[end] != '"' && json[end] != ',' && json[end] != '}' && json[end] != ']') {
+            end++;
+        }
+        return json.substr(pos, end - pos);
+    }
+    pos += search.length();
+    size_t end = pos;
+    while (end < json.length()) {
+        if (json[end] == '\\' && end + 1 < json.length()) {
+            end += 2;
+            continue;
+        }
+        if (json[end] == '"') break;
+        end++;
+    }
+    std::string res = json.substr(pos, end - pos);
+    std::string unescaped = "";
+    for (size_t i = 0; i < res.length(); ++i) {
+        if (res[i] == '\\' && i + 1 < res.length()) {
+            if (res[i+1] == 'n') unescaped += '\n';
+            else if (res[i+1] == '"') unescaped += '"';
+            else if (res[i+1] == '\\') unescaped += '\\';
+            else unescaped += res[i+1];
+            i++;
+        } else {
+            unescaped += res[i];
+        }
+    }
+    return unescaped;
+}
+
+long long JsonExtractInt(const std::string& json, const std::string& key) {
+    std::string search = "\"" + key + "\":";
+    size_t pos = json.find(search);
+    if (pos == std::string::npos) return 0;
+    pos += search.length();
+    while (pos < json.length() && (json[pos] == ' ' || json[pos] == '"')) {
+        pos++;
+    }
+    size_t end = pos;
+    while (end < json.length() && (json[end] == '-' || (json[end] >= '0' && json[end] <= '9'))) {
+        end++;
+    }
+    if (end == pos) return 0;
+    try {
+        return std::stoll(json.substr(pos, end - pos));
+    } catch (...) {
+        return 0;
+    }
+}
+
+std::vector<std::string> JsonExtractArray(const std::string& json, const std::string& key) {
+    std::vector<std::string> items;
+    size_t pos = 0;
+    if (!key.empty()) {
+        std::string search = "\"" + key + "\":[";
+        pos = json.find(search);
+        if (pos == std::string::npos) return items;
+        pos += search.length();
+    } else {
+        pos = json.find('[');
+        if (pos == std::string::npos) return items;
+        pos += 1;
+    }
+    
+    int braceCount = 0;
+    size_t start = std::string::npos;
+    for (size_t i = pos; i < json.length(); ++i) {
+        if (json[i] == '{') {
+            if (braceCount == 0) {
+                start = i;
+            }
+            braceCount++;
+        } else if (json[i] == '}') {
+            braceCount--;
+            if (braceCount == 0 && start != std::string::npos) {
+                items.push_back(json.substr(start, i - start + 1));
+                start = std::string::npos;
+            }
+        } else if (json[i] == ']' && braceCount == 0) {
+            break;
+        }
+    }
+    return items;
+}
+
+std::string escapeJSON(const std::string& s) {
+    std::string out = "";
+    for (char c : s) {
+        if (c == '"') out += "\\\"";
+        else if (c == '\\') out += "\\\\";
+        else if (c == '\n') out += "\\n";
+        else if (c == '\r') out += "\\r";
+        else out += c;
+    }
+    return out;
+}
+
+struct SupportMsg {
+    std::string sender;
+    bool is_admin;
+    std::string message;
+    long long timestamp;
+};
+
+struct SupportChatData {
+    int id = 0;
+    int status = 0;
+    bool unread_by_player = false;
+    std::vector<SupportMsg> messages;
+};
+
+struct AdminTicket {
+    int chat_id = 0;
+    int charId = 0;
+    std::string char_name;
+    int status = 0;
+    long long last_message_at = 0;
+    bool unread_by_admin = false;
+};
+
+struct AdminGroupMsg {
+    std::string sender;
+    std::string message;
+    long long timestamp = 0;
+};
+
+struct BugReportData {
+    int bug_id = 0;
+    std::string title;
+    std::string description;
+    std::string reporter;
+    int category = 0;
+    int priority = 0;
+    int assigned_to = 0;
+    int status = 0;
+    long long created_at = 0;
+    long long last_updated = 0;
+};
+
+struct BugCommentData {
+    int comment_id = 0;
+    std::string sender;
+    std::string comment;
+    long long timestamp = 0;
+};
+
+std::mutex g_supportMu;
+SupportChatData g_playerChat;
+std::vector<AdminTicket> g_adminTickets;
+int g_adminSelectedChatId = 0;
+SupportChatData g_adminActiveChat;
+
+std::vector<AdminGroupMsg> g_adminGroupMsgs;
+std::vector<BugReportData> g_bugReports;
+int g_adminSelectedBugId = 0;
+std::vector<BugCommentData> g_bugComments;
+
+bool g_supportLoading = false;
+std::string g_supportError = "";
+std::string g_supportSuccessMsg = "";
+
+int64_t g_lastPollMs = 0;
+std::atomic<bool> g_pollActive{false};
+
+void PollSupportDataAsync(uint32_t player_id, bool isGm) {
+    int64_t now = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+    
+    if (now - g_lastPollMs < 2000) return;
+    g_lastPollMs = now;
+    
+    if (g_pollActive.load()) return;
+    g_pollActive.store(true);
+    
+    std::async(std::launch::async, [player_id, isGm]() {
+        char host[128] = {0};
+        voice::GetVoiceServerHost(host, sizeof(host));
+        std::string baseUrl = "http://" + std::string(host) + ":17668";
+        
+        ix::HttpClient httpClient;
+        ix::HttpRequestArgs args;
+        args.timeout = 2;
+        
+        if (!isGm) {
+            std::string url = baseUrl + "/support/chat?player_id=" + std::to_string(player_id);
+            auto response = httpClient.get(url, args);
+            if (response->statusCode == 200) {
+                std::string body = response->body;
+                SupportChatData chat;
+                chat.id = (int)JsonExtractInt(body, "chat_id");
+                chat.status = (int)JsonExtractInt(body, "status");
+                chat.unread_by_player = JsonExtractInt(body, "unread_by_player") == 1;
+                
+                auto msgs = JsonExtractArray(body, "messages");
+                for (const auto& item : msgs) {
+                    SupportMsg m;
+                    m.sender = JsonExtractString(item, "sender");
+                    m.is_admin = JsonExtractInt(item, "is_admin") == 1;
+                    m.message = JsonExtractString(item, "message");
+                    m.timestamp = JsonExtractInt(item, "timestamp");
+                    chat.messages.push_back(m);
+                }
+                
+                std::lock_guard<std::mutex> lk(g_supportMu);
+                g_playerChat = chat;
+                g_supportError = "";
+            } else {
+                std::lock_guard<std::mutex> lk(g_supportMu);
+                g_supportError = "Conexao offline.";
+            }
+        } else {
+            // GM mode: poll tickets
+            {
+                std::string url = baseUrl + "/support/admin/tickets?player_id=" + std::to_string(player_id);
+                auto response = httpClient.get(url, args);
+                if (response->statusCode == 200) {
+                    std::string body = response->body;
+                    std::vector<AdminTicket> list;
+                    auto items = JsonExtractArray("{\"items\":" + body + "}", "items");
+                    for (const auto& item : items) {
+                        AdminTicket c;
+                        c.chat_id = (int)JsonExtractInt(item, "chat_id");
+                        c.charId = (int)JsonExtractInt(item, "charId");
+                        c.char_name = JsonExtractString(item, "char_name");
+                        c.status = (int)JsonExtractInt(item, "status");
+                        c.last_message_at = JsonExtractInt(item, "last_message_at");
+                        c.unread_by_admin = JsonExtractInt(item, "unread_by_admin") == 1;
+                        list.push_back(c);
+                    }
+                    std::lock_guard<std::mutex> lk(g_supportMu);
+                    g_adminTickets = list;
+                }
+            }
+            
+            // active GM chat
+            int activeChatId = 0;
+            {
+                std::lock_guard<std::mutex> lk(g_supportMu);
+                activeChatId = g_adminSelectedChatId;
+            }
+            if (activeChatId > 0) {
+                std::string url = baseUrl + "/support/chat?player_id=" + std::to_string(player_id) + "&chat_id=" + std::to_string(activeChatId);
+                auto response = httpClient.get(url, args);
+                if (response->statusCode == 200) {
+                    std::string body = response->body;
+                    SupportChatData chat;
+                    chat.id = (int)JsonExtractInt(body, "chat_id");
+                    chat.status = (int)JsonExtractInt(body, "status");
+                    chat.unread_by_player = JsonExtractInt(body, "unread_by_player") == 1;
+                    
+                    auto msgs = JsonExtractArray(body, "messages");
+                    for (const auto& item : msgs) {
+                        SupportMsg m;
+                        m.sender = JsonExtractString(item, "sender");
+                        m.is_admin = JsonExtractInt(item, "is_admin") == 1;
+                        m.message = JsonExtractString(item, "message");
+                        m.timestamp = JsonExtractInt(item, "timestamp");
+                        chat.messages.push_back(m);
+                    }
+                    std::lock_guard<std::mutex> lk(g_supportMu);
+                    g_adminActiveChat = chat;
+                }
+            }
+            
+            // staff group
+            {
+                std::string url = baseUrl + "/support/admin/group?player_id=" + std::to_string(player_id);
+                auto response = httpClient.get(url, args);
+                if (response->statusCode == 200) {
+                    std::string body = response->body;
+                    std::vector<AdminGroupMsg> list;
+                    auto items = JsonExtractArray("{\"items\":" + body + "}", "items");
+                    for (const auto& item : items) {
+                        AdminGroupMsg m;
+                        m.sender = JsonExtractString(item, "sender");
+                        m.message = JsonExtractString(item, "message");
+                        m.timestamp = JsonExtractInt(item, "timestamp");
+                        list.push_back(m);
+                    }
+                    std::lock_guard<std::mutex> lk(g_supportMu);
+                    g_adminGroupMsgs = list;
+                }
+            }
+            
+            // bugs
+            {
+                std::string url = baseUrl + "/support/admin/bugs?player_id=" + std::to_string(player_id);
+                auto response = httpClient.get(url, args);
+                if (response->statusCode == 200) {
+                    std::string body = response->body;
+                    std::vector<BugReportData> list;
+                    auto items = JsonExtractArray("{\"items\":" + body + "}", "items");
+                    for (const auto& item : items) {
+                        BugReportData b;
+                        b.bug_id = (int)JsonExtractInt(item, "bug_id");
+                        b.title = JsonExtractString(item, "title");
+                        b.description = JsonExtractString(item, "description");
+                        b.reporter = JsonExtractString(item, "reporter");
+                        b.category = (int)JsonExtractInt(item, "category");
+                        b.priority = (int)JsonExtractInt(item, "priority");
+                        b.assigned_to = (int)JsonExtractInt(item, "assigned_to");
+                        b.status = (int)JsonExtractInt(item, "status");
+                        b.created_at = JsonExtractInt(item, "created_at");
+                        b.last_updated = JsonExtractInt(item, "last_updated");
+                        list.push_back(b);
+                    }
+                    std::lock_guard<std::mutex> lk(g_supportMu);
+                    g_bugReports = list;
+                }
+            }
+            
+            // bug comments
+            int activeBugId = 0;
+            {
+                std::lock_guard<std::mutex> lk(g_supportMu);
+                activeBugId = g_adminSelectedBugId;
+            }
+            if (activeBugId > 0) {
+                std::string url = baseUrl + "/support/admin/bugs?player_id=" + std::to_string(player_id) + "&bug_id=" + std::to_string(activeBugId);
+                auto response = httpClient.get(url, args);
+                if (response->statusCode == 200) {
+                    std::string body = response->body;
+                    std::vector<BugCommentData> list;
+                    auto items = JsonExtractArray("{\"items\":" + body + "}", "items");
+                    for (const auto& item : items) {
+                        BugCommentData c;
+                        c.comment_id = (int)JsonExtractInt(item, "comment_id");
+                        c.sender = JsonExtractString(item, "sender");
+                        c.comment = JsonExtractString(item, "comment");
+                        c.timestamp = JsonExtractInt(item, "timestamp");
+                        list.push_back(c);
+                    }
+                    std::lock_guard<std::mutex> lk(g_supportMu);
+                    g_bugComments = list;
+                }
+            }
+        }
+        
+        g_pollActive.store(false);
+    });
+}
+
+void SendPlayerMessageAsync(uint32_t player_id, const std::string& message) {
+    std::async(std::launch::async, [player_id, message]() {
+        char host[128] = {0};
+        voice::GetVoiceServerHost(host, sizeof(host));
+        std::string url = "http://" + std::string(host) + ":17668/support/chat";
+        
+        ix::HttpClient httpClient;
+        ix::HttpRequestArgs args;
+        args.timeout = 5;
+        std::string body = "{\"player_id\":" + std::to_string(player_id) + ",\"message\":\"" + escapeJSON(message) + "\"}";
+        auto response = httpClient.post(url, body, args);
+        if (response->statusCode == 200) {
+            g_lastPollMs = 0;
+        }
+    });
+}
+
+void SendReportBugAsync(uint32_t player_id, const std::string& title, const std::string& desc, int cat, int prio) {
+    std::async(std::launch::async, [player_id, title, desc, cat, prio]() {
+        char host[128] = {0};
+        voice::GetVoiceServerHost(host, sizeof(host));
+        std::string url = "http://" + std::string(host) + ":17668/support/report_bug";
+        
+        ix::HttpClient httpClient;
+        ix::HttpRequestArgs args;
+        args.timeout = 5;
+        std::string body = "{\"player_id\":" + std::to_string(player_id) + 
+                           ",\"title\":\"" + escapeJSON(title) + 
+                           "\",\"description\":\"" + escapeJSON(desc) + 
+                           "\",\"category\":" + std::to_string(cat) + 
+                           ",\"priority\":" + std::to_string(prio) + "}";
+        auto response = httpClient.post(url, body, args);
+        std::lock_guard<std::mutex> lk(g_supportMu);
+        if (response->statusCode == 200) {
+            g_supportSuccessMsg = "Bug reportado!";
+            g_supportError = "";
+        } else {
+            g_supportError = "Erro ao enviar.";
+        }
+    });
+}
+
+void SendAdminReplyAsync(uint32_t player_id, int chat_id, const std::string& message) {
+    std::async(std::launch::async, [player_id, chat_id, message]() {
+        char host[128] = {0};
+        voice::GetVoiceServerHost(host, sizeof(host));
+        std::string url = "http://" + std::string(host) + ":17668/support/admin/reply";
+        
+        ix::HttpClient httpClient;
+        ix::HttpRequestArgs args;
+        args.timeout = 5;
+        std::string body = "{\"player_id\":" + std::to_string(player_id) + 
+                           ",\"chat_id\":" + std::to_string(chat_id) + 
+                           ",\"message\":\"" + escapeJSON(message) + "\"}";
+        auto response = httpClient.post(url, body, args);
+        if (response->statusCode == 200) {
+            g_lastPollMs = 0;
+        }
+    });
+}
+
+void SendAdminCloseChatAsync(uint32_t player_id, int chat_id) {
+    std::async(std::launch::async, [player_id, chat_id]() {
+        char host[128] = {0};
+        voice::GetVoiceServerHost(host, sizeof(host));
+        std::string url = "http://" + std::string(host) + ":17668/support/admin/close";
+        
+        ix::HttpClient httpClient;
+        ix::HttpRequestArgs args;
+        args.timeout = 5;
+        std::string body = "{\"player_id\":" + std::to_string(player_id) + 
+                           ",\"chat_id\":" + std::to_string(chat_id) + "}";
+        auto response = httpClient.post(url, body, args);
+        if (response->statusCode == 200) {
+            g_lastPollMs = 0;
+        }
+    });
+}
+
+void SendAdminReopenChatAsync(uint32_t player_id, int chat_id) {
+    std::async(std::launch::async, [player_id, chat_id]() {
+        char host[128] = {0};
+        voice::GetVoiceServerHost(host, sizeof(host));
+        std::string url = "http://" + std::string(host) + ":17668/support/admin/reopen";
+        
+        ix::HttpClient httpClient;
+        ix::HttpRequestArgs args;
+        args.timeout = 5;
+        std::string body = "{\"player_id\":" + std::to_string(player_id) + 
+                           ",\"chat_id\":" + std::to_string(chat_id) + "}";
+        auto response = httpClient.post(url, body, args);
+        if (response->statusCode == 200) {
+            g_lastPollMs = 0;
+        }
+    });
+}
+
+void SendAdminGroupMsgAsync(uint32_t player_id, const std::string& message) {
+    std::async(std::launch::async, [player_id, message]() {
+        char host[128] = {0};
+        voice::GetVoiceServerHost(host, sizeof(host));
+        std::string url = "http://" + std::string(host) + ":17668/support/admin/group";
+        
+        ix::HttpClient httpClient;
+        ix::HttpRequestArgs args;
+        args.timeout = 5;
+        std::string body = "{\"player_id\":" + std::to_string(player_id) + 
+                           ",\"message\":\"" + escapeJSON(message) + "\"}";
+        auto response = httpClient.post(url, body, args);
+        if (response->statusCode == 200) {
+            g_lastPollMs = 0;
+        }
+    });
+}
+
+void SendBugCommentAsync(uint32_t player_id, int bug_id, const std::string& comment) {
+    std::async(std::launch::async, [player_id, bug_id, comment]() {
+        char host[128] = {0};
+        voice::GetVoiceServerHost(host, sizeof(host));
+        std::string url = "http://" + std::string(host) + ":17668/support/admin/bug/comment";
+        
+        ix::HttpClient httpClient;
+        ix::HttpRequestArgs args;
+        args.timeout = 5;
+        std::string body = "{\"player_id\":" + std::to_string(player_id) + 
+                           ",\"bug_id\":" + std::to_string(bug_id) + 
+                           ",\"comment\":\"" + escapeJSON(comment) + "\"}";
+        auto response = httpClient.post(url, body, args);
+        if (response->statusCode == 200) {
+            g_lastPollMs = 0;
+        }
+    });
+}
+
+void SendBugUpdateAsync(uint32_t player_id, int bug_id, int status, int priority, int category) {
+    std::async(std::launch::async, [player_id, bug_id, status, priority, category]() {
+        char host[128] = {0};
+        voice::GetVoiceServerHost(host, sizeof(host));
+        std::string url = "http://" + std::string(host) + ":17668/support/admin/bug/update";
+        
+        ix::HttpClient httpClient;
+        ix::HttpRequestArgs args;
+        args.timeout = 5;
+        std::string body = "{\"player_id\":" + std::to_string(player_id) + 
+                           ",\"bug_id\":" + std::to_string(bug_id) + 
+                           ",\"status\":" + std::to_string(status) + 
+                           ",\"priority\":" + std::to_string(priority) + 
+                           ",\"category\":" + std::to_string(category) + "}";
+        auto response = httpClient.post(url, body, args);
+        if (response->statusCode == 200) {
+            g_lastPollMs = 0;
+        }
+    });
+}
+
+void DrawSupportWindow() {
+    if (!IsSupportWindowOpen()) return;
+    int lang = g_language.load();
+    OverlayState st = SnapshotOverlayState();
+    
+    char localName[64] = {0};
+    GetSpeakerName(st.session_id, localName, sizeof(localName));
+    if (localName[0] == '\0') {
+        std::strncpy(localName, st.char_name, sizeof(localName) - 1);
+    }
+    
+    bool isGm = false;
+    if (_strnicmp(localName, "GM ", 3) == 0 ||
+        _strnicmp(localName, "GM-", 3) == 0 ||
+        _strnicmp(localName, "Admin ", 6) == 0 ||
+        _strnicmp(localName, "[GM]", 4) == 0 ||
+        _strnicmp(localName, "(GM)", 4) == 0 ||
+        _strnicmp(localName, "ADM ", 4) == 0 ||
+        _strnicmp(localName, "ADM-", 4) == 0 ||
+        _strnicmp(localName, "[ADM]", 5) == 0 ||
+        _strnicmp(localName, "(ADM)", 5) == 0 ||
+        _strnicmp(localName, "Staff ", 6) == 0) {
+        isGm = true;
+    }
+    
+    PollSupportDataAsync(st.player_id, isGm);
+    
+    ImGui::SetNextWindowSize(ImVec2(650, 450), ImGuiCond_FirstUseEver);
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.04f, 0.04f, 0.04f, 0.94f));
+    ImGui::PushStyleColor(ImGuiCol_Border,   ImVec4(0.83f, 0.68f, 0.21f, 0.8f));
+    ImGui::PushStyleColor(ImGuiCol_TitleBg,  ImVec4(0.12f, 0.09f, 0.06f, 1.0f));
+    ImGui::PushStyleColor(ImGuiCol_TitleBgActive, ImVec4(0.18f, 0.14f, 0.09f, 1.0f));
+    
+    bool keepOpen = true;
+    const char* winTitle = isGm ? (lang == 0 ? "Painel Administrativo" : "Admin Panel") 
+                                : (lang == 0 ? "Central de Suporte" : "Support Center");
+                                
+    if (ImGui::Begin(winTitle, &keepOpen, ImGuiWindowFlags_NoCollapse)) {
+        if (!keepOpen) {
+            SetSupportWindowOpen(false);
+        }
+        
+        std::string errStr;
+        {
+            std::lock_guard<std::mutex> lk(g_supportMu);
+            errStr = g_supportError;
+        }
+        if (!errStr.empty()) {
+            ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "%s", errStr.c_str());
+            ImGui::Separator();
+        }
+        
+        if (!isGm) {
+            static int playerTab = 0;
+            ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(10, 6));
+            if (ImGui::Button(lang == 0 ? "Falar com ADM" : "Chat with Admin", ImVec2(150, 30))) playerTab = 0;
+            ImGui::SameLine();
+            if (ImGui::Button(lang == 0 ? "Reportar Bug" : "Report a Bug", ImVec2(150, 30))) playerTab = 1;
+            ImGui::PopStyleVar();
+            
+            ImGui::Separator();
+            ImGui::Spacing();
+            
+            if (playerTab == 0) {
+                SupportChatData chat;
+                {
+                    std::lock_guard<std::mutex> lk(g_supportMu);
+                    chat = g_playerChat;
+                }
+                
+                ImGui::TextDisabled(lang == 0 ? "Status do Atendimento:" : "Ticket Status:");
+                ImGui::SameLine();
+                const char* statusStr = "Nenhum";
+                ImVec4 statusCol = ImVec4(0.7f, 0.7f, 0.7f, 1.0f);
+                if (chat.status == 0 || chat.status == 3) {
+                    statusStr = lang == 0 ? "Aberto" : "Open";
+                    statusCol = ImVec4(0.3f, 0.8f, 0.3f, 1.0f);
+                } else if (chat.status == 1) {
+                    statusStr = lang == 0 ? "Aguardando Admin" : "Waiting for Admin";
+                    statusCol = ImVec4(1.0f, 0.6f, 0.2f, 1.0f);
+                } else if (chat.status == 2) {
+                    statusStr = lang == 0 ? "Aguardando Jogador" : "Waiting for Player";
+                    statusCol = ImVec4(0.2f, 0.6f, 1.0f, 1.0f);
+                } else if (chat.status == 4) {
+                    statusStr = lang == 0 ? "Encerrado" : "Closed";
+                    statusCol = ImVec4(0.6f, 0.6f, 0.6f, 1.0f);
+                }
+                ImGui::TextColored(statusCol, "%s", statusStr);
+                
+                ImGui::BeginChild("##player_chat_log", ImVec2(0, -40), true);
+                for (const auto& msg : chat.messages) {
+                    if (msg.is_admin) {
+                        ImGui::TextColored(ImVec4(0.83f, 0.68f, 0.21f, 1.0f), "[ADMIN] %s:", msg.sender.c_str());
+                    } else {
+                        ImGui::TextColored(ImVec4(0.4f, 0.8f, 1.0f, 1.0f), "%s:", msg.sender.c_str());
+                    }
+                    ImGui::SameLine();
+                    ImGui::TextUnformatted(msg.message.c_str());
+                }
+                ImGui::SetScrollHereY(1.0f);
+                ImGui::EndChild();
+                
+                static char chatInput[256] = "";
+                ImGui::PushItemWidth(-100);
+                if (ImGui::InputText("##player_chat_input", chatInput, sizeof(chatInput), ImGuiInputTextFlags_EnterReturnsTrue)) {
+                    if (chatInput[0] != '\0') {
+                        SendPlayerMessageAsync(st.player_id, chatInput);
+                        chatInput[0] = '\0';
+                    }
+                }
+                ImGui::PopItemWidth();
+                ImGui::SameLine();
+                if (ImGui::Button(lang == 0 ? "Enviar" : "Send", ImVec2(90, 22))) {
+                    if (chatInput[0] != '\0') {
+                        SendPlayerMessageAsync(st.player_id, chatInput);
+                        chatInput[0] = '\0';
+                    }
+                }
+            } else if (playerTab == 1) {
+                static char bugTitle[128] = "";
+                static char bugDesc[512] = "";
+                static int bugCat = 8;
+                static int bugPrio = 1;
+                
+                ImGui::TextUnformatted(lang == 0 ? "Titulo do Bug:" : "Bug Title:");
+                ImGui::InputText("##bug_title", bugTitle, sizeof(bugTitle));
+                
+                ImGui::TextUnformatted(lang == 0 ? "Descricao do Ocorrido:" : "Description:");
+                ImGui::InputTextMultiline("##bug_desc", bugDesc, sizeof(bugDesc), ImVec2(0, 120));
+                
+                const char* categories[] = { "Gameplay", "Quest", "NPC", "Skill", "Event", "Interface", "Economy", "Exploit", "Other" };
+                ImGui::TextUnformatted(lang == 0 ? "Categoria:" : "Category:");
+                ImGui::Combo("##bug_cat", &bugCat, categories, IM_ARRAYSIZE(categories));
+                
+                const char* priorities[] = { "Low", "Normal", "High", "Critical" };
+                ImGui::TextUnformatted(lang == 0 ? "Prioridade:" : "Priority:");
+                ImGui::Combo("##bug_prio", &bugPrio, priorities, IM_ARRAYSIZE(priorities));
+                
+                std::string successStr;
+                {
+                    std::lock_guard<std::mutex> lk(g_supportMu);
+                    successStr = g_supportSuccessMsg;
+                }
+                if (!successStr.empty()) {
+                    ImGui::TextColored(ImVec4(0.3f, 0.8f, 0.3f, 1.0f), "%s", successStr.c_str());
+                }
+                
+                if (ImGui::Button(lang == 0 ? "Enviar Relatorio" : "Submit Report", ImVec2(180, 30))) {
+                    if (bugTitle[0] != '\0' && bugDesc[0] != '\0') {
+                        SendReportBugAsync(st.player_id, bugTitle, bugDesc, bugCat, bugPrio);
+                        bugTitle[0] = '\0';
+                        bugDesc[0] = '\0';
+                    }
+                }
+            }
+        } else {
+            static int gmTab = 0;
+            ImGui::Columns(2, "##gm_panel_split", true);
+            static bool initialColumnWidthSet = false;
+            if (!initialColumnWidthSet) {
+                ImGui::SetColumnWidth(0, 150.0f);
+                initialColumnWidthSet = true;
+            }
+            
+            ImGui::BeginChild("##gm_sidebar", ImVec2(0, 0), true);
+            if (ImGui::Selectable(lang == 0 ? "Atendimentos" : "Tickets", gmTab == 0)) gmTab = 0;
+            ImGui::Spacing();
+            if (ImGui::Selectable(lang == 0 ? "Chat Staff" : "Staff Chat", gmTab == 1)) gmTab = 1;
+            ImGui::Spacing();
+            if (ImGui::Selectable(lang == 0 ? "Bugs Relatados" : "Bug Tracker", gmTab == 2)) gmTab = 2;
+            ImGui::EndChild();
+            
+            ImGui::NextColumn();
+            
+            ImGui::BeginChild("##gm_content", ImVec2(0, 0), false);
+            if (gmTab == 0) {
+                std::vector<AdminTicket> tickets;
+                {
+                    std::lock_guard<std::mutex> lk(g_supportMu);
+                    tickets = g_adminTickets;
+                }
+                
+                ImGui::Columns(2, "##gm_tickets_split", true);
+                ImGui::BeginChild("##gm_tickets_sublist", ImVec2(0, 0), true);
+                for (const auto& t : tickets) {
+                    char label[128];
+                    const char* statLabel = t.status == 4 ? "[x]" : t.unread_by_admin ? "[!]" : "[ ]";
+                    _snprintf_s(label, sizeof(label), _TRUNCATE, "%s %s", statLabel, t.char_name.c_str());
+                    
+                    bool isSelected = (g_adminSelectedChatId == t.chat_id);
+                    if (ImGui::Selectable(label, isSelected)) {
+                        std::lock_guard<std::mutex> lk(g_supportMu);
+                        g_adminSelectedChatId = t.chat_id;
+                    }
+                }
+                ImGui::EndChild();
+                ImGui::NextColumn();
+                
+                ImGui::BeginChild("##gm_ticket_chat_feed", ImVec2(0, 0), false);
+                if (g_adminSelectedChatId > 0) {
+                    SupportChatData activeChat;
+                    {
+                        std::lock_guard<std::mutex> lk(g_supportMu);
+                        activeChat = g_adminActiveChat;
+                    }
+                    
+                    ImGui::Text(lang == 0 ? "Atendimento #%d" : "Ticket #%d", activeChat.id);
+                    ImGui::SameLine();
+                    if (activeChat.status != 4) {
+                        if (ImGui::SmallButton(lang == 0 ? "Fechar" : "Close")) {
+                            SendAdminCloseChatAsync(st.player_id, activeChat.id);
+                        }
+                    } else {
+                        if (ImGui::SmallButton(lang == 0 ? "Reabrir" : "Reopen")) {
+                            SendAdminReopenChatAsync(st.player_id, activeChat.id);
+                        }
+                    }
+                    
+                    ImGui::Separator();
+                    ImGui::BeginChild("##gm_ticket_messages", ImVec2(0, -40), true);
+                    for (const auto& msg : activeChat.messages) {
+                        if (msg.is_admin) {
+                            ImGui::TextColored(ImVec4(0.83f, 0.68f, 0.21f, 1.0f), "%s:", msg.sender.c_str());
+                        } else {
+                            ImGui::TextColored(ImVec4(0.4f, 0.8f, 1.0f, 1.0f), "%s:", msg.sender.c_str());
+                        }
+                        ImGui::SameLine();
+                        ImGui::TextUnformatted(msg.message.c_str());
+                    }
+                    ImGui::SetScrollHereY(1.0f);
+                    ImGui::EndChild();
+                    
+                    static char gmReplyInput[256] = "";
+                    ImGui::PushItemWidth(-80);
+                    if (ImGui::InputText("##gm_reply_input", gmReplyInput, sizeof(gmReplyInput), ImGuiInputTextFlags_EnterReturnsTrue)) {
+                        if (gmReplyInput[0] != '\0') {
+                            SendAdminReplyAsync(st.player_id, activeChat.id, gmReplyInput);
+                            gmReplyInput[0] = '\0';
+                        }
+                    }
+                    ImGui::PopItemWidth();
+                    ImGui::SameLine();
+                    if (ImGui::Button(lang == 0 ? "Resp" : "Reply", ImVec2(70, 22))) {
+                        if (gmReplyInput[0] != '\0') {
+                            SendAdminReplyAsync(st.player_id, activeChat.id, gmReplyInput);
+                            gmReplyInput[0] = '\0';
+                        }
+                    }
+                } else {
+                    ImGui::TextDisabled(lang == 0 ? "Selecione um ticket ao lado" : "Select a ticket from the list");
+                }
+                ImGui::EndChild();
+                ImGui::Columns(1);
+            } else if (gmTab == 1) {
+                std::vector<AdminGroupMsg> groupMsgs;
+                {
+                    std::lock_guard<std::mutex> lk(g_supportMu);
+                    groupMsgs = g_adminGroupMsgs;
+                }
+                
+                ImGui::BeginChild("##gm_group_chat_feed", ImVec2(0, -40), true);
+                for (const auto& msg : groupMsgs) {
+                    if (msg.sender == "[SYSTEM]") {
+                        ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f), "[SISTEMA] %s", msg.message.c_str());
+                    } else {
+                        ImGui::TextColored(ImVec4(0.83f, 0.68f, 0.21f, 1.0f), "%s:", msg.sender.c_str());
+                        ImGui::SameLine();
+                        ImGui::TextUnformatted(msg.message.c_str());
+                    }
+                }
+                ImGui::SetScrollHereY(1.0f);
+                ImGui::EndChild();
+                
+                static char staffInput[256] = "";
+                ImGui::PushItemWidth(-90);
+                if (ImGui::InputText("##staff_chat_input", staffInput, sizeof(staffInput), ImGuiInputTextFlags_EnterReturnsTrue)) {
+                    if (staffInput[0] != '\0') {
+                        SendAdminGroupMsgAsync(st.player_id, staffInput);
+                        staffInput[0] = '\0';
+                    }
+                }
+                ImGui::PopItemWidth();
+                ImGui::SameLine();
+                if (ImGui::Button(lang == 0 ? "Enviar" : "Send", ImVec2(80, 22))) {
+                    if (staffInput[0] != '\0') {
+                        SendAdminGroupMsgAsync(st.player_id, staffInput);
+                        staffInput[0] = '\0';
+                    }
+                }
+            } else if (gmTab == 2) {
+                std::vector<BugReportData> bugs;
+                {
+                    std::lock_guard<std::mutex> lk(g_supportMu);
+                    bugs = g_bugReports;
+                }
+                
+                ImGui::Columns(2, "##gm_bugs_split", true);
+                ImGui::BeginChild("##gm_bugs_sublist", ImVec2(0, 0), true);
+                for (const auto& b : bugs) {
+                    char label[128];
+                    const char* statLabel = b.status == 2 ? "[v]" : b.status == 3 ? "[x]" : "[*]";
+                    _snprintf_s(label, sizeof(label), _TRUNCATE, "%s %s", statLabel, b.title.c_str());
+                    
+                    bool isSelected = (g_adminSelectedBugId == b.bug_id);
+                    if (ImGui::Selectable(label, isSelected)) {
+                        std::lock_guard<std::mutex> lk(g_supportMu);
+                        g_adminSelectedBugId = b.bug_id;
+                    }
+                }
+                ImGui::EndChild();
+                ImGui::NextColumn();
+                
+                ImGui::BeginChild("##gm_bug_details_pane", ImVec2(0, 0), false);
+                if (g_adminSelectedBugId > 0) {
+                    BugReportData b;
+                    bool found = false;
+                    for (const auto& item : bugs) {
+                        if (item.bug_id == g_adminSelectedBugId) {
+                            b = item;
+                            found = true;
+                            break;
+                        }
+                    }
+                    
+                    if (found) {
+                        ImGui::Text("Bug #%d: %s", b.bug_id, b.title.c_str());
+                        ImGui::TextDisabled("Reporter: %s", b.reporter.c_str());
+                        ImGui::Separator();
+                        ImGui::Spacing();
+                        
+                        ImGui::TextWrapped("Desc: %s", b.description.c_str());
+                        ImGui::Spacing();
+                        
+                        int curStatus = b.status;
+                        const char* bugStatuses[] = { "Aberto", "Em Analise", "Corrigido", "Fechado" };
+                        if (ImGui::Combo("Status", &curStatus, bugStatuses, IM_ARRAYSIZE(bugStatuses))) {
+                            SendBugUpdateAsync(st.player_id, b.bug_id, curStatus, b.priority, b.category);
+                        }
+                        
+                        int curPriority = b.priority;
+                        const char* bugPriorities[] = { "Low", "Normal", "High", "Critical" };
+                        if (ImGui::Combo("Prio", &curPriority, bugPriorities, IM_ARRAYSIZE(bugPriorities))) {
+                            SendBugUpdateAsync(st.player_id, b.bug_id, b.status, curPriority, b.category);
+                        }
+                        
+                        ImGui::Separator();
+                        ImGui::TextUnformatted(lang == 0 ? "Comentarios:" : "Comments:");
+                        
+                        std::vector<BugCommentData> comments;
+                        {
+                            std::lock_guard<std::mutex> lk(g_supportMu);
+                            comments = g_bugComments;
+                        }
+                        ImGui::BeginChild("##gm_bug_comments_log", ImVec2(0, 100), true);
+                        for (const auto& c : comments) {
+                            ImGui::TextColored(ImVec4(0.83f, 0.68f, 0.21f, 1.0f), "%s:", c.sender.c_str());
+                            ImGui::SameLine();
+                            ImGui::TextUnformatted(c.comment.c_str());
+                        }
+                        ImGui::SetScrollHereY(1.0f);
+                        ImGui::EndChild();
+                        
+                        static char bugCommentInput[256] = "";
+                        ImGui::PushItemWidth(-80);
+                        if (ImGui::InputText("##bug_comment_input", bugCommentInput, sizeof(bugCommentInput), ImGuiInputTextFlags_EnterReturnsTrue)) {
+                            if (bugCommentInput[0] != '\0') {
+                                SendBugCommentAsync(st.player_id, b.bug_id, bugCommentInput);
+                                bugCommentInput[0] = '\0';
+                            }
+                        }
+                        ImGui::PopItemWidth();
+                        ImGui::SameLine();
+                        if (ImGui::Button("Add", ImVec2(70, 22))) {
+                            if (bugCommentInput[0] != '\0') {
+                                SendBugCommentAsync(st.player_id, b.bug_id, bugCommentInput);
+                                bugCommentInput[0] = '\0';
+                            }
+                        }
+                    }
+                } else {
+                    ImGui::TextDisabled(lang == 0 ? "Selecione um bug ao lado" : "Select a bug from the list");
+                }
+                ImGui::EndChild();
+                ImGui::Columns(1);
+            }
+            ImGui::EndChild();
+            ImGui::Columns(1);
+        }
+    }
+    ImGui::End();
+    ImGui::PopStyleColor(4);
+}
+
 void DrawPanel() {
     int lang = g_language.load();
     // The mode banner is independent of panel visibility — it stays
@@ -1725,6 +2626,8 @@ void DrawPanel() {
     DrawModeBanner();
     // Toasts likewise — always rendered while there are active ones.
     DrawToasts();
+
+    DrawSupportWindow();
 
     if (g_minimized.load()) {
         DrawMinimized();
