@@ -61,6 +61,20 @@ void Logf(const char* fmt, ...) {
     OutputDebugStringA(buf);
 }
 
+bool IsAdminName(const char* name) {
+    if (!name || !name[0]) return false;
+    return (_strnicmp(name, "GM ",   3) == 0 ||
+            _strnicmp(name, "GM-",   3) == 0 ||
+            _strnicmp(name, "Admin ",6) == 0 ||
+            _strnicmp(name, "[GM]",  4) == 0 ||
+            _strnicmp(name, "(GM)",  4) == 0 ||
+            _strnicmp(name, "ADM ",  4) == 0 ||
+            _strnicmp(name, "ADM-",  4) == 0 ||
+            _strnicmp(name, "[ADM]", 5) == 0 ||
+            _strnicmp(name, "(ADM)", 5) == 0 ||
+            _strnicmp(name, "Staff ",6) == 0);
+}
+
 namespace voice {
 
 namespace {
@@ -1561,20 +1575,6 @@ void DrawMinimizedSpeakerList() {
         GetSpeakerName(st.session_id, localName, sizeof(localName));
     }
 
-    auto IsAdminName = [](const char* name) -> bool {
-        if (!name || !name[0]) return false;
-        return (_strnicmp(name, "GM ",   3) == 0 ||
-                _strnicmp(name, "GM-",   3) == 0 ||
-                _strnicmp(name, "Admin ",6) == 0 ||
-                _strnicmp(name, "[GM]",  4) == 0 ||
-                _strnicmp(name, "(GM)",  4) == 0 ||
-                _strnicmp(name, "ADM ",  4) == 0 ||
-                _strnicmp(name, "ADM-",  4) == 0 ||
-                _strnicmp(name, "[ADM]", 5) == 0 ||
-                _strnicmp(name, "(ADM)", 5) == 0 ||
-                _strnicmp(name, "Staff ",6) == 0);
-    };
-
     bool isGm = IsAdminName(localName);
     const char* supportLabel = isGm ? "Admin" : (lang == 0 ? "Falar com ADM" : "Contact Admin");
     float supportBtnW = ImGui::CalcTextSize(supportLabel).x + 12.0f;
@@ -1597,6 +1597,37 @@ void DrawMinimizedSpeakerList() {
         SetSupportWindowOpen(!IsSupportWindowOpen());
     }
     ImGui::PopStyleColor(3);
+
+    // Render unread badge if > 0
+    int unreadCount = 0;
+    {
+        std::lock_guard<std::mutex> lk(g_supportMu);
+        if (isGm) {
+            for (const auto& t : g_adminTickets) {
+                unreadCount += t.unread_count;
+            }
+        } else {
+            unreadCount = g_playerChat.unread_count;
+        }
+    }
+    if (unreadCount > 0) {
+        ImVec2 btnMin = ImGui::GetItemRectMin();
+        ImVec2 btnMax = ImGui::GetItemRectMax();
+        ImVec2 center = ImVec2(btnMax.x - 2.0f, btnMin.y + 2.0f);
+        float radius = 7.0f;
+        
+        ImDrawList* drawList = ImGui::GetWindowDrawList();
+        drawList->AddCircleFilled(center, radius, IM_COL32(230, 40, 40, 255));
+        
+        char countStr[16];
+        _snprintf_s(countStr, sizeof(countStr), _TRUNCATE, "%d", unreadCount);
+        ImVec2 textSz = ImGui::CalcTextSize(countStr);
+        ImVec2 textPos = ImVec2(center.x - textSz.x / 2.0f, center.y - textSz.y / 2.0f - 1.0f);
+        
+        ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(255, 255, 255, 255));
+        drawList->AddText(textPos, IM_COL32(255, 255, 255, 255), countStr);
+        ImGui::PopStyleColor();
+    }
 
     ImGui::Separator();
     ImGui::Spacing();
@@ -1846,6 +1877,7 @@ struct SupportChatData {
     int id = 0;
     int status = 0;
     bool unread_by_player = false;
+    int unread_count = 0;
     std::vector<SupportMsg> messages;
 };
 
@@ -1856,6 +1888,7 @@ struct AdminTicket {
     int status = 0;
     long long last_message_at = 0;
     bool unread_by_admin = false;
+    int unread_count = 0;
 };
 
 struct AdminGroupMsg {
@@ -1933,7 +1966,8 @@ void PollSupportDataAsync(uint32_t player_id, bool isGm) {
                 SupportChatData chat;
                 chat.id = (int)JsonExtractInt(body, "chat_id");
                 chat.status = (int)JsonExtractInt(body, "status");
-                chat.unread_by_player = JsonExtractInt(body, "unread_by_player") == 1;
+                chat.unread_count = (int)JsonExtractInt(body, "unread_by_player");
+                chat.unread_by_player = chat.unread_count > 0;
                 
                 auto msgs = JsonExtractArray(body, "messages");
                 for (const auto& item : msgs) {
@@ -1971,7 +2005,8 @@ void PollSupportDataAsync(uint32_t player_id, bool isGm) {
                         c.char_name = JsonExtractString(item, "char_name");
                         c.status = (int)JsonExtractInt(item, "status");
                         c.last_message_at = JsonExtractInt(item, "last_message_at");
-                        c.unread_by_admin = JsonExtractInt(item, "unread_by_admin") == 1;
+                        c.unread_count = (int)JsonExtractInt(item, "unread_by_admin");
+                        c.unread_by_admin = c.unread_count > 0;
                         list.push_back(c);
                     }
                     std::lock_guard<std::mutex> lk(g_supportMu);
@@ -2289,20 +2324,6 @@ void DrawSupportWindow() {
         GetSpeakerName(st.session_id, localName, sizeof(localName));
     }
     
-    auto IsAdminName = [](const char* name) -> bool {
-        if (!name || !name[0]) return false;
-        return (_strnicmp(name, "GM ",   3) == 0 ||
-                _strnicmp(name, "GM-",   3) == 0 ||
-                _strnicmp(name, "Admin ",6) == 0 ||
-                _strnicmp(name, "[GM]",  4) == 0 ||
-                _strnicmp(name, "(GM)",  4) == 0 ||
-                _strnicmp(name, "ADM ",  4) == 0 ||
-                _strnicmp(name, "ADM-",  4) == 0 ||
-                _strnicmp(name, "[ADM]", 5) == 0 ||
-                _strnicmp(name, "(ADM)", 5) == 0 ||
-                _strnicmp(name, "Staff ",6) == 0);
-    };
-
     bool isGm = IsAdminName(localName);
     
     PollSupportDataAsync(st.player_id, isGm);
@@ -2683,6 +2704,24 @@ void DrawPanel() {
     DrawToasts();
 
     DrawSupportWindow();
+
+    // Background poll every 10 seconds to keep unread badges updated.
+    OverlayState st = SnapshotOverlayState();
+    if (st.ws_connected && st.player_id > 0) {
+        static int64_t lastBgPollMs = 0;
+        int64_t now = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count();
+        if (now - lastBgPollMs > 10000) {
+            lastBgPollMs = now;
+            char localName[64] = {0};
+            if (st.char_name[0] != '\0') {
+                std::strncpy(localName, st.char_name, sizeof(localName) - 1);
+            } else {
+                GetSpeakerName(st.session_id, localName, sizeof(localName));
+            }
+            PollSupportDataAsync(st.player_id, IsAdminName(localName));
+        }
+    }
 
     if (g_minimized.load()) {
         DrawMinimized();
