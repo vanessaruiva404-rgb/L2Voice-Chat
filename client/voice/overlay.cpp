@@ -1542,17 +1542,23 @@ void DrawMinimizedSpeakerList() {
     else          ImGui::TextColored(pingCol, "%d ms", ping);
 
     // Calculate space needed for support button
+    char localName[64] = {0};
+    GetSpeakerName(st.session_id, localName, sizeof(localName));
+    if (localName[0] == '\0') {
+        std::strncpy(localName, st.char_name, sizeof(localName) - 1);
+    }
+
     bool isGm = false;
-    if (_strnicmp(st.char_name, "GM ", 3) == 0 ||
-        _strnicmp(st.char_name, "GM-", 3) == 0 ||
-        _strnicmp(st.char_name, "Admin ", 6) == 0 ||
-        _strnicmp(st.char_name, "[GM]", 4) == 0 ||
-        _strnicmp(st.char_name, "(GM)", 4) == 0 ||
-        _strnicmp(st.char_name, "ADM ", 4) == 0 ||
-        _strnicmp(st.char_name, "ADM-", 4) == 0 ||
-        _strnicmp(st.char_name, "[ADM]", 5) == 0 ||
-        _strnicmp(st.char_name, "(ADM)", 5) == 0 ||
-        _strnicmp(st.char_name, "Staff ", 6) == 0) {
+    if (_strnicmp(localName, "GM ", 3) == 0 ||
+        _strnicmp(localName, "GM-", 3) == 0 ||
+        _strnicmp(localName, "Admin ", 6) == 0 ||
+        _strnicmp(localName, "[GM]", 4) == 0 ||
+        _strnicmp(localName, "(GM)", 4) == 0 ||
+        _strnicmp(localName, "ADM ", 4) == 0 ||
+        _strnicmp(localName, "ADM-", 4) == 0 ||
+        _strnicmp(localName, "[ADM]", 5) == 0 ||
+        _strnicmp(localName, "(ADM)", 5) == 0 ||
+        _strnicmp(localName, "Staff ", 6) == 0) {
         isGm = true;
     }
     const char* supportLabel = isGm ? "Admin" : (lang == 0 ? "Falar com ADM" : "Contact Admin");
