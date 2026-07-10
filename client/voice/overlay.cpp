@@ -1481,14 +1481,7 @@ void DrawMinimizedSpeakerList() {
     if (ping < 0) ImGui::TextColored(pingCol, "--");
     else          ImGui::TextColored(pingCol, "%d ms", ping);
 
-    ImGui::Separator();
-    ImGui::Spacing();
-
-    // Quick active TX channel selectors (below ping)
-    int activeTx = GetActiveTxChannel();
-    float availW = ImGui::GetContentRegionAvail().x;
-
-    // Check if player is GM based on char_name
+    // Calculate space needed for support button
     bool isGm = false;
     if (_strnicmp(st.char_name, "GM ", 3) == 0 ||
         _strnicmp(st.char_name, "Admin ", 6) == 0 ||
@@ -1496,11 +1489,41 @@ void DrawMinimizedSpeakerList() {
         isGm = true;
     }
     const char* supportLabel = isGm ? "Admin" : (lang == 0 ? "Falar com ADM" : "Contact Admin");
+    float supportBtnW = ImGui::CalcTextSize(supportLabel).x + 12.0f;
 
-    // Dynamic width calculation
-    float btnSupportW = ImGui::CalcTextSize(supportLabel).x + 12.0f;
-    float remainingW = availW - btnSupportW - (4.0f * ImGui::GetStyle().ItemSpacing.x);
-    float btnW = remainingW / 4.0f;
+    // Align to the right side of the window
+    float posX = ImGui::GetWindowWidth() - supportBtnW - ImGui::GetStyle().WindowPadding.x - 4.0f;
+    if (posX > ImGui::GetCursorPosX()) {
+        ImGui::SameLine(posX);
+    } else {
+        ImGui::SameLine();
+    }
+
+    // Styling: Dark background, golden color on hover/active
+    ImGui::PushStyleColor(ImGuiCol_Button,        IM_COL32(0x2a, 0x1f, 0x15, 0xee));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, IM_COL32(0xd4, 0xaf, 0x37, 0xaa));
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive,  IM_COL32(0xd4, 0xaf, 0x37, 0xee));
+    
+    // Render the button (18.0f height to match the text line nicely)
+    if (ImGui::Button(supportLabel, ImVec2(supportBtnW, 18.0f))) {
+        typedef void (*SendBypassToServerFn)(const wchar_t* bypass);
+        HMODULE hDsetup = GetModuleHandleW(L"dsetup.dll");
+        if (hDsetup) {
+            SendBypassToServerFn pfnSendBypass = (SendBypassToServerFn)GetProcAddress(hDsetup, "SendBypassToServer");
+            if (pfnSendBypass) {
+                pfnSendBypass(L"suporte");
+            }
+        }
+    }
+    ImGui::PopStyleColor(3);
+
+    ImGui::Separator();
+    ImGui::Spacing();
+
+    // Quick active TX channel selectors (below ping)
+    int activeTx = GetActiveTxChannel();
+    float availW = ImGui::GetContentRegionAvail().x;
+    float btnW = (availW - (3.0f * ImGui::GetStyle().ItemSpacing.x)) / 4.0f;
 
     auto drawTxBtn = [&](const char* label, int channelId) {
         bool active = (activeTx == channelId);
@@ -1529,24 +1552,6 @@ void DrawMinimizedSpeakerList() {
     drawTxBtn(lang == 0 ? "Clan" : "Clan", 2);
     ImGui::SameLine();
     drawTxBtn("Ally", 3);
-    ImGui::SameLine();
-
-    // Draw Support button
-    ImGui::PushStyleColor(ImGuiCol_Button,        IM_COL32(0x2a, 0x1f, 0x15, 0xee));
-    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, IM_COL32(0xd4, 0xaf, 0x37, 0xaa));
-    ImGui::PushStyleColor(ImGuiCol_ButtonActive,  IM_COL32(0xd4, 0xaf, 0x37, 0xee));
-    if (ImGui::Button(supportLabel, ImVec2(btnSupportW, 20.0f))) {
-        // Dynamically find and call dsetup.dll SendBypassToServer
-        typedef void (*SendBypassToServerFn)(const wchar_t* bypass);
-        HMODULE hDsetup = GetModuleHandleW(L"dsetup.dll");
-        if (hDsetup) {
-            SendBypassToServerFn pfnSendBypass = (SendBypassToServerFn)GetProcAddress(hDsetup, "SendBypassToServer");
-            if (pfnSendBypass) {
-                pfnSendBypass(L"suporte");
-            }
-        }
-    }
-    ImGui::PopStyleColor(3);
 
     ImGui::Spacing();
 
