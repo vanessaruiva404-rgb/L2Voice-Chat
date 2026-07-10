@@ -118,6 +118,10 @@ void SetPrioritizeClanLeader(bool active);
 bool IsPrioritizePartyLeader();
 void SetPrioritizePartyLeader(bool active);
 
+bool IsSupportWindowOpen();
+void SetSupportWindowOpen(bool open);
+void GetVoiceServerHost(char* out, size_t cap);
+
 // Returns true if at least one remote session is currently audible.
 // Used by the HUD to show the "X is speaking" badge.
 bool HasActiveSpeakers();
