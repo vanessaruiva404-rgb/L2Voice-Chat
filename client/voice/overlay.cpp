@@ -77,6 +77,68 @@ bool IsAdminName(const char* name) {
 
 namespace voice {
 
+struct SupportMsg {
+    std::string sender;
+    bool is_admin;
+    std::string message;
+    long long timestamp;
+};
+
+struct SupportChatData {
+    int id = 0;
+    int status = 0;
+    bool unread_by_player = false;
+    int unread_count = 0;
+    std::vector<SupportMsg> messages;
+};
+
+struct AdminTicket {
+    int chat_id = 0;
+    int charId = 0;
+    std::string char_name;
+    int status = 0;
+    long long last_message_at = 0;
+    bool unread_by_admin = false;
+    int unread_count = 0;
+};
+
+struct AdminGroupMsg {
+    std::string sender;
+    std::string message;
+    long long timestamp = 0;
+};
+
+struct BugReportData {
+    int bug_id = 0;
+    std::string title;
+    std::string description;
+    std::string reporter;
+    int category = 0;
+    int priority = 0;
+    int assigned_to = 0;
+    int status = 0;
+    long long created_at = 0;
+    long long last_updated = 0;
+};
+
+struct BugCommentData {
+    int comment_id = 0;
+    std::string sender;
+    std::string comment;
+    long long timestamp = 0;
+};
+
+std::mutex g_supportMu;
+SupportChatData g_playerChat;
+std::vector<AdminTicket> g_adminTickets;
+int g_adminSelectedChatId = 0;
+SupportChatData g_adminActiveChat;
+
+std::vector<AdminGroupMsg> g_adminGroupMsgs;
+std::vector<BugReportData> g_bugReports;
+int g_adminSelectedBugId = 0;
+std::vector<BugCommentData> g_bugComments;
+
 namespace {
 
 void ReloadEmbeddedTextures(IDirect3DDevice9* dev);
@@ -1866,67 +1928,7 @@ std::string escapeJSON(const std::string& s) {
     return out;
 }
 
-struct SupportMsg {
-    std::string sender;
-    bool is_admin;
-    std::string message;
-    long long timestamp;
-};
 
-struct SupportChatData {
-    int id = 0;
-    int status = 0;
-    bool unread_by_player = false;
-    int unread_count = 0;
-    std::vector<SupportMsg> messages;
-};
-
-struct AdminTicket {
-    int chat_id = 0;
-    int charId = 0;
-    std::string char_name;
-    int status = 0;
-    long long last_message_at = 0;
-    bool unread_by_admin = false;
-    int unread_count = 0;
-};
-
-struct AdminGroupMsg {
-    std::string sender;
-    std::string message;
-    long long timestamp = 0;
-};
-
-struct BugReportData {
-    int bug_id = 0;
-    std::string title;
-    std::string description;
-    std::string reporter;
-    int category = 0;
-    int priority = 0;
-    int assigned_to = 0;
-    int status = 0;
-    long long created_at = 0;
-    long long last_updated = 0;
-};
-
-struct BugCommentData {
-    int comment_id = 0;
-    std::string sender;
-    std::string comment;
-    long long timestamp = 0;
-};
-
-std::mutex g_supportMu;
-SupportChatData g_playerChat;
-std::vector<AdminTicket> g_adminTickets;
-int g_adminSelectedChatId = 0;
-SupportChatData g_adminActiveChat;
-
-std::vector<AdminGroupMsg> g_adminGroupMsgs;
-std::vector<BugReportData> g_bugReports;
-int g_adminSelectedBugId = 0;
-std::vector<BugCommentData> g_bugComments;
 
 bool g_supportLoading = false;
 std::string g_supportError = "";
@@ -2729,7 +2731,7 @@ void DrawPanel() {
         return;
     }
 
-    OverlayState st = SnapshotOverlayState();
+    st = SnapshotOverlayState();
 
     // Fixed-size window. Title bar enabled (= draggable, shows
     // connection status), no collapse triangle, no resize grip. The
