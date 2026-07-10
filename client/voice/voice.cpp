@@ -1067,6 +1067,32 @@ bool HasActiveSpeakers() {
     return g_mod.playback.ActiveSpeakers() > 0;
 }
 
+static bool g_supportWindowOpen = false;
+bool IsSupportWindowOpen() {
+    return g_supportWindowOpen;
+}
+void SetSupportWindowOpen(bool open) {
+    g_supportWindowOpen = open;
+}
+void GetVoiceServerHost(char* out, size_t cap) {
+    if (!out || cap == 0) return;
+    const char* p = std::strstr(g_mod.cfg.ws_url, "://");
+    if (p) {
+        p += 3;
+        size_t len = 0;
+        while (p[len] && p[len] != '/' && p[len] != ':') {
+            len++;
+        }
+        if (len < cap) {
+            std::strncpy(out, p, len);
+            out[len] = 0;
+            return;
+        }
+    }
+    std::strncpy(out, "127.0.0.1", cap - 1);
+    out[cap - 1] = 0;
+}
+
 int GetPlayerSpeakingChannelImpl(const char* name) {
     if (!name || !name[0]) return -1;
     std::lock_guard<std::mutex> lk(g_local_prefs_mu);
