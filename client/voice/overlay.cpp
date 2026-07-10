@@ -1547,8 +1547,11 @@ void DrawMinimizedSpeakerList() {
         _strnicmp(st.char_name, "GM-", 3) == 0 ||
         _strnicmp(st.char_name, "Admin ", 6) == 0 ||
         _strnicmp(st.char_name, "[GM]", 4) == 0 ||
+        _strnicmp(st.char_name, "(GM)", 4) == 0 ||
         _strnicmp(st.char_name, "ADM ", 4) == 0 ||
         _strnicmp(st.char_name, "ADM-", 4) == 0 ||
+        _strnicmp(st.char_name, "[ADM]", 5) == 0 ||
+        _strnicmp(st.char_name, "(ADM)", 5) == 0 ||
         _strnicmp(st.char_name, "Staff ", 6) == 0) {
         isGm = true;
     }
