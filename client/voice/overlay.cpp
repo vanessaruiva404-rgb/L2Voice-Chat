@@ -1915,7 +1915,7 @@ void PollSupportDataAsync(uint32_t player_id, bool isGm) {
     std::thread([player_id, isGm]() {
         char host[128] = {0};
         voice::GetVoiceServerHost(host, sizeof(host));
-        std::string baseUrl = "http://" + std::string(host) + ":17668";
+        std::string baseUrl = "http://" + std::string(host) + ":50100/support.php?route=";
         
         ix::HttpClient httpClient;
         auto args = std::make_shared<ix::HttpRequestArgs>();
@@ -2088,21 +2088,12 @@ void PollSupportDataAsync(uint32_t player_id, bool isGm) {
                         }
                         std::lock_guard<std::mutex> lk(g_supportMu);
                         g_bugComments = list;
-                    }
-                }
-            }
-        }
-        
-        g_pollActive.store(false);
-    }).detach();
-}
-
-void SendPlayerMessageAsync(uint32_t player_id, const std::string& message) {
+              void SendPlayerMessageAsync(uint32_t player_id, const std::string& message) {
     Logf("[l2voice] SendPlayerMessageAsync: player_id=%u message=%s\n", player_id, message.c_str());
     std::thread([player_id, message]() {
         char host[128] = {0};
         voice::GetVoiceServerHost(host, sizeof(host));
-        std::string url = "http://" + std::string(host) + ":17668/support/chat";
+        std::string url = "http://" + std::string(host) + ":50100/support.php?route=/support/chat";
         
         ix::HttpClient httpClient;
         auto args = std::make_shared<ix::HttpRequestArgs>();
@@ -2122,7 +2113,7 @@ void SendReportBugAsync(uint32_t player_id, const std::string& title, const std:
     std::thread([player_id, title, desc, cat, prio]() {
         char host[128] = {0};
         voice::GetVoiceServerHost(host, sizeof(host));
-        std::string url = "http://" + std::string(host) + ":17668/support/report_bug";
+        std::string url = "http://" + std::string(host) + ":50100/support.php?route=/support/report_bug";
         
         ix::HttpClient httpClient;
         auto args = std::make_shared<ix::HttpRequestArgs>();
@@ -2150,7 +2141,7 @@ void SendAdminReplyAsync(uint32_t player_id, int chat_id, const std::string& mes
     std::thread([player_id, chat_id, message]() {
         char host[128] = {0};
         voice::GetVoiceServerHost(host, sizeof(host));
-        std::string url = "http://" + std::string(host) + ":17668/support/admin/reply";
+        std::string url = "http://" + std::string(host) + ":50100/support.php?route=/support/admin/reply";
         
         ix::HttpClient httpClient;
         auto args = std::make_shared<ix::HttpRequestArgs>();
@@ -2172,7 +2163,7 @@ void SendAdminCloseChatAsync(uint32_t player_id, int chat_id) {
     std::thread([player_id, chat_id]() {
         char host[128] = {0};
         voice::GetVoiceServerHost(host, sizeof(host));
-        std::string url = "http://" + std::string(host) + ":17668/support/admin/close";
+        std::string url = "http://" + std::string(host) + ":50100/support.php?route=/support/admin/close";
         
         ix::HttpClient httpClient;
         auto args = std::make_shared<ix::HttpRequestArgs>();
@@ -2193,7 +2184,7 @@ void SendAdminReopenChatAsync(uint32_t player_id, int chat_id) {
     std::thread([player_id, chat_id]() {
         char host[128] = {0};
         voice::GetVoiceServerHost(host, sizeof(host));
-        std::string url = "http://" + std::string(host) + ":17668/support/admin/reopen";
+        std::string url = "http://" + std::string(host) + ":50100/support.php?route=/support/admin/reopen";
         
         ix::HttpClient httpClient;
         auto args = std::make_shared<ix::HttpRequestArgs>();
@@ -2214,7 +2205,7 @@ void SendAdminGroupMsgAsync(uint32_t player_id, const std::string& message) {
     std::thread([player_id, message]() {
         char host[128] = {0};
         voice::GetVoiceServerHost(host, sizeof(host));
-        std::string url = "http://" + std::string(host) + ":17668/support/admin/group";
+        std::string url = "http://" + std::string(host) + ":50100/support.php?route=/support/admin/group";
         
         ix::HttpClient httpClient;
         auto args = std::make_shared<ix::HttpRequestArgs>();
@@ -2235,7 +2226,7 @@ void SendBugCommentAsync(uint32_t player_id, int bug_id, const std::string& comm
     std::thread([player_id, bug_id, comment]() {
         char host[128] = {0};
         voice::GetVoiceServerHost(host, sizeof(host));
-        std::string url = "http://" + std::string(host) + ":17668/support/admin/bug/comment";
+        std::string url = "http://" + std::string(host) + ":50100/support.php?route=/support/admin/bug/comment";
         
         ix::HttpClient httpClient;
         auto args = std::make_shared<ix::HttpRequestArgs>();
@@ -2257,7 +2248,7 @@ void SendBugUpdateAsync(uint32_t player_id, int bug_id, int status, int priority
     std::thread([player_id, bug_id, status, priority, category]() {
         char host[128] = {0};
         voice::GetVoiceServerHost(host, sizeof(host));
-        std::string url = "http://" + std::string(host) + ":17668/support/admin/bug/update";
+        std::string url = "http://" + std::string(host) + ":50100/support.php?route=/support/admin/bug/update";
         
         ix::HttpClient httpClient;
         auto args = std::make_shared<ix::HttpRequestArgs>();
