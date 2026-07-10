@@ -3329,29 +3329,43 @@ bool GetDeviceVTableEntries(void*& endSceneOut, void*& resetOut) {
     IDirect3D9* d3d = pCreate(D3D_SDK_VERSION);
     if (!d3d) return false;
 
+    // Create a temporary dummy window instead of using GetDesktopWindow()
+    // This prevents crashes in Intel UHD/integrated graphics drivers due to cross-process window focus.
+    HWND dummyWnd = CreateWindowA("BUTTON", "Dummy", WS_OVERLAPPEDWINDOW, 0, 0, 100, 100, NULL, NULL, NULL, NULL);
+    if (!dummyWnd) {
+        d3d->Release();
+        return false;
+    }
+
     D3DPRESENT_PARAMETERS pp = {};
     pp.Windowed         = TRUE;
     pp.SwapEffect       = D3DSWAPEFFECT_DISCARD;
     pp.BackBufferFormat = D3DFMT_UNKNOWN;
-    pp.hDeviceWindow    = GetDesktopWindow();
+    pp.hDeviceWindow    = dummyWnd;
 
     IDirect3DDevice9* dev = nullptr;
     HRESULT hr = d3d->CreateDevice(
-        D3DADAPTER_DEFAULT, D3DDEVTYPE_NULLREF, GetDesktopWindow(),
+        D3DADAPTER_DEFAULT, D3DDEVTYPE_NULLREF, dummyWnd,
         D3DCREATE_SOFTWARE_VERTEXPROCESSING, &pp, &dev);
     if (FAILED(hr) || !dev) {
-        // Fallback to D3DDEVTYPE_HAL if NULLREF is not supported by the system drivers
+        // Fallback to D3DDEVTYPE_HAL
         hr = d3d->CreateDevice(
-            D3DADAPTER_DEFAULT, D3DDEVTYPE_HAL, GetDesktopWindow(),
+            D3DADAPTER_DEFAULT, D3DDEVTYPE_HAL, dummyWnd,
             D3DCREATE_SOFTWARE_VERTEXPROCESSING, &pp, &dev);
     }
-    if (FAILED(hr) || !dev) { d3d->Release(); return false; }
-    void** vt = *reinterpret_cast<void***>(dev);
-    resetOut    = vt[16];
-    endSceneOut = vt[42];
-    dev->Release();
+    
+    bool success = false;
+    if (SUCCEEDED(hr) && dev) {
+        void** vt = *reinterpret_cast<void***>(dev);
+        resetOut    = vt[16];
+        endSceneOut = vt[42];
+        dev->Release();
+        success = true;
+    }
+    
+    DestroyWindow(dummyWnd);
     d3d->Release();
-    return true;
+    return success;
 }
 
 }  // namespace
