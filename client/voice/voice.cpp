@@ -670,11 +670,12 @@ bool Init(const Config& cfg) {
     g_mod.running.store(true);
 
     // Install the in-game overlay (D3D9 EndScene hook + ImGui panel).
-    // Logs progress to OutputDebugString — failures are non-fatal,
-    // the audio pipeline still works without the UI.
+    // Delaying this to OnRenderFrame to prevent race conditions during game startup D3D9 init.
+    /*
     if (!InstallOverlay()) {
         OutputDebugStringA("[l2voice] overlay install failed; continuing without UI\n");
     }
+    */
 
     // Keepalive thread: every 5s the DLL emits a UDP header-only
     // packet so the voice-service learns (and refreshes) our UDP
@@ -913,6 +914,28 @@ void OnRenderFrame() {
     // the WS stays open, holding a TCP slot for nothing. When the
     // player re-enters world, ports return → resume.
     int64_t now_ms = NowMillis();
+
+    // Delayed initialization of D3D9 overlay hook after the main game window is created.
+    // This completely avoids concurrent D3D9 device creation race conditions which cause
+    // startup crashes (General Protection Fault) on Intel UHD/integrated graphics.
+    static bool overlayInstalled = false;
+    if (!overlayInstalled) {
+        HWND l2Wnd = FindWindowA("L2UnrealWWindowsViewportWindow", NULL);
+        if (l2Wnd != NULL) {
+            static int64_t windowFoundTime = 0;
+            if (windowFoundTime == 0) {
+                windowFoundTime = now_ms;
+            } else if (now_ms - windowFoundTime > 2000) {
+                if (InstallOverlay()) {
+                    overlayInstalled = true;
+                    OutputDebugStringA("[l2voice] InstallOverlay succeeded after game window ready!\n");
+                } else {
+                    windowFoundTime = 0;
+                }
+            }
+        }
+    }
+
     if (!g_voice_suspended
         && g_out_of_world_at > 0
         && (now_ms - g_out_of_world_at) > kOutOfWorldGraceMs) {
