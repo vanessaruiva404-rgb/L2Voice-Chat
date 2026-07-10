@@ -805,6 +805,66 @@ void DrawProximityTab(const OverlayState& st) {
     ImGui::Spacing();
     ImGui::Separator();
 
+    // ----- Audio Devices -----
+    ImGui::TextDisabled(lang == 0 ? "Dispositivos de Áudio" : "Audio Devices");
+    
+    // Playback (Saída)
+    {
+        char currentDevice[128] = {0};
+        GetPlaybackDevice(currentDevice, sizeof(currentDevice));
+        std::vector<std::string> devices = EnumeratePlaybackDevices();
+        
+        ImGui::TextUnformatted(lang == 0 ? "Saída (Som):" : "Playback (Output):");
+        ImGui::PushItemWidth(-1);
+        const char* preview = (currentDevice[0] == '\0') ? (lang == 0 ? "Padrão do Sistema" : "System Default") : currentDevice;
+        if (ImGui::BeginCombo("##playback_combo", preview)) {
+            if (ImGui::Selectable(lang == 0 ? "Padrão do Sistema" : "System Default", currentDevice[0] == '\0')) {
+                SetPlaybackDevice("");
+            }
+            for (const auto& dev : devices) {
+                bool isSelected = (std::strcmp(currentDevice, dev.c_str()) == 0);
+                if (ImGui::Selectable(dev.c_str(), isSelected)) {
+                    SetPlaybackDevice(dev.c_str());
+                }
+                if (isSelected) {
+                    ImGui::SetItemDefaultFocus();
+                }
+            }
+            ImGui::EndCombo();
+        }
+        ImGui::PopItemWidth();
+    }
+    
+    // Capture (Entrada/Microfone)
+    {
+        char currentDevice[128] = {0};
+        GetCaptureDevice(currentDevice, sizeof(currentDevice));
+        std::vector<std::string> devices = EnumerateCaptureDevices();
+        
+        ImGui::TextUnformatted(lang == 0 ? "Entrada (Mic):" : "Capture (Input):");
+        ImGui::PushItemWidth(-1);
+        const char* preview = (currentDevice[0] == '\0') ? (lang == 0 ? "Padrão do Sistema" : "System Default") : currentDevice;
+        if (ImGui::BeginCombo("##capture_combo", preview)) {
+            if (ImGui::Selectable(lang == 0 ? "Padrão do Sistema" : "System Default", currentDevice[0] == '\0')) {
+                SetCaptureDevice("");
+            }
+            for (const auto& dev : devices) {
+                bool isSelected = (std::strcmp(currentDevice, dev.c_str()) == 0);
+                if (ImGui::Selectable(dev.c_str(), isSelected)) {
+                    SetCaptureDevice(dev.c_str());
+                }
+                if (isSelected) {
+                    ImGui::SetItemDefaultFocus();
+                }
+            }
+            ImGui::EndCombo();
+        }
+        ImGui::PopItemWidth();
+    }
+
+    ImGui::Spacing();
+    ImGui::Separator();
+
     // ----- Speakers + mute-all -----
     ImGui::TextDisabled(lang == 0 ? "jogadores próximos" : "speakers");
     ImGui::SameLine();
