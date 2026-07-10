@@ -2088,7 +2088,16 @@ void PollSupportDataAsync(uint32_t player_id, bool isGm) {
                         }
                         std::lock_guard<std::mutex> lk(g_supportMu);
                         g_bugComments = list;
-              void SendPlayerMessageAsync(uint32_t player_id, const std::string& message) {
+                    }
+                }
+            }
+        }
+        
+        g_pollActive.store(false);
+    }).detach();
+}
+
+void SendPlayerMessageAsync(uint32_t player_id, const std::string& message) {
     Logf("[l2voice] SendPlayerMessageAsync: player_id=%u message=%s\n", player_id, message.c_str());
     std::thread([player_id, message]() {
         char host[128] = {0};
