@@ -50,6 +50,25 @@ void ResolveIniPath(wchar_t* out, size_t cap) {
 
 void InitWorker() {
     OutputDebugStringA("[l2voice] InitWorker started\n");
+
+    // Wait until the main game viewport window is created and fully initialized.
+    // This prevents audio subsystem and D3D9 initialization conflicts with Lineage II
+    // during game engine startup (UGameEngine::Init), eliminating GPF crashes on low-end systems.
+    HWND l2Wnd = nullptr;
+    for (int i = 0; i < 100; ++i) { // Wait up to 50 seconds
+        l2Wnd = FindWindowA("L2UnrealWWindowsViewportWindow", NULL);
+        if (l2Wnd != NULL) break;
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    }
+    
+    if (l2Wnd == NULL) {
+        OutputDebugStringA("[l2voice] InitWorker: Lineage II window not found, aborting init\n");
+        return;
+    }
+    
+    // Give the engine another 2.5 seconds to fully complete audio & D3D initialization
+    std::this_thread::sleep_for(std::chrono::milliseconds(2500));
+
     wchar_t ini_path[MAX_PATH];
     ResolveIniPath(ini_path, MAX_PATH);
 
