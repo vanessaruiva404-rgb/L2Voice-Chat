@@ -741,7 +741,7 @@ void RefreshClientPorts() {
 void Shutdown() {
     if (!g_mod.running.exchange(false)) return;
     UninstallOverlay();
-    if (g_mod.keepalive_thread.joinable()) g_mod.keepalive_thread.join();
+    if (g_mod.keepalive_thread.joinable()) g_mod.keepalive_thread.detach();
     g_mod.capture.Stop();
     g_mod.net.Stop();
     g_mod.playback.Stop();
