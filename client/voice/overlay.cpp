@@ -35,12 +35,6 @@
 #include <cstdarg>
 #include <cstdio>
 #include <mutex>
-#include <future>
-#include <thread>
-#include <vector>
-#include <string>
-#include <ixwebsocket/IXHttpClient.h>
-#include <ixwebsocket/IXHttp.h>
 
 #define STB_IMAGE_IMPLEMENTATION
 #define STBI_NO_HDR
@@ -61,83 +55,7 @@ void Logf(const char* fmt, ...) {
     OutputDebugStringA(buf);
 }
 
-bool IsAdminName(const char* name) {
-    if (!name || !name[0]) return false;
-    return (_strnicmp(name, "GM ",   3) == 0 ||
-            _strnicmp(name, "GM-",   3) == 0 ||
-            _strnicmp(name, "Admin ",6) == 0 ||
-            _strnicmp(name, "[GM]",  4) == 0 ||
-            _strnicmp(name, "(GM)",  4) == 0 ||
-            _strnicmp(name, "ADM ",  4) == 0 ||
-            _strnicmp(name, "ADM-",  4) == 0 ||
-            _strnicmp(name, "[ADM]", 5) == 0 ||
-            _strnicmp(name, "(ADM)", 5) == 0 ||
-            _strnicmp(name, "Staff ",6) == 0);
-}
-
 namespace voice {
-
-struct SupportMsg {
-    std::string sender;
-    bool is_admin;
-    std::string message;
-    long long timestamp;
-};
-
-struct SupportChatData {
-    int id = 0;
-    int status = 0;
-    bool unread_by_player = false;
-    int unread_count = 0;
-    std::vector<SupportMsg> messages;
-};
-
-struct AdminTicket {
-    int chat_id = 0;
-    int charId = 0;
-    std::string char_name;
-    int status = 0;
-    long long last_message_at = 0;
-    bool unread_by_admin = false;
-    int unread_count = 0;
-};
-
-struct AdminGroupMsg {
-    std::string sender;
-    std::string message;
-    long long timestamp = 0;
-};
-
-struct BugReportData {
-    int bug_id = 0;
-    std::string title;
-    std::string description;
-    std::string reporter;
-    int category = 0;
-    int priority = 0;
-    int assigned_to = 0;
-    int status = 0;
-    long long created_at = 0;
-    long long last_updated = 0;
-};
-
-struct BugCommentData {
-    int comment_id = 0;
-    std::string sender;
-    std::string comment;
-    long long timestamp = 0;
-};
-
-std::mutex g_supportMu;
-SupportChatData g_playerChat;
-std::vector<AdminTicket> g_adminTickets;
-int g_adminSelectedChatId = 0;
-SupportChatData g_adminActiveChat;
-
-std::vector<AdminGroupMsg> g_adminGroupMsgs;
-std::vector<BugReportData> g_bugReports;
-int g_adminSelectedBugId = 0;
-std::vector<BugCommentData> g_bugComments;
 
 namespace {
 
@@ -887,66 +805,6 @@ void DrawProximityTab(const OverlayState& st) {
     ImGui::Spacing();
     ImGui::Separator();
 
-    // ----- Audio Devices -----
-    ImGui::TextDisabled(lang == 0 ? "Dispositivos de Áudio" : "Audio Devices");
-    
-    // Playback (Saída)
-    {
-        char currentDevice[128] = {0};
-        GetPlaybackDevice(currentDevice, sizeof(currentDevice));
-        std::vector<std::string> devices = EnumeratePlaybackDevices();
-        
-        ImGui::TextUnformatted(lang == 0 ? "Saída (Som):" : "Playback (Output):");
-        ImGui::PushItemWidth(-1);
-        const char* preview = (currentDevice[0] == '\0') ? (lang == 0 ? "Padrão do Sistema" : "System Default") : currentDevice;
-        if (ImGui::BeginCombo("##playback_combo", preview)) {
-            if (ImGui::Selectable(lang == 0 ? "Padrão do Sistema" : "System Default", currentDevice[0] == '\0')) {
-                SetPlaybackDevice("");
-            }
-            for (const auto& dev : devices) {
-                bool isSelected = (std::strcmp(currentDevice, dev.c_str()) == 0);
-                if (ImGui::Selectable(dev.c_str(), isSelected)) {
-                    SetPlaybackDevice(dev.c_str());
-                }
-                if (isSelected) {
-                    ImGui::SetItemDefaultFocus();
-                }
-            }
-            ImGui::EndCombo();
-        }
-        ImGui::PopItemWidth();
-    }
-    
-    // Capture (Entrada/Microfone)
-    {
-        char currentDevice[128] = {0};
-        GetCaptureDevice(currentDevice, sizeof(currentDevice));
-        std::vector<std::string> devices = EnumerateCaptureDevices();
-        
-        ImGui::TextUnformatted(lang == 0 ? "Entrada (Mic):" : "Capture (Input):");
-        ImGui::PushItemWidth(-1);
-        const char* preview = (currentDevice[0] == '\0') ? (lang == 0 ? "Padrão do Sistema" : "System Default") : currentDevice;
-        if (ImGui::BeginCombo("##capture_combo", preview)) {
-            if (ImGui::Selectable(lang == 0 ? "Padrão do Sistema" : "System Default", currentDevice[0] == '\0')) {
-                SetCaptureDevice("");
-            }
-            for (const auto& dev : devices) {
-                bool isSelected = (std::strcmp(currentDevice, dev.c_str()) == 0);
-                if (ImGui::Selectable(dev.c_str(), isSelected)) {
-                    SetCaptureDevice(dev.c_str());
-                }
-                if (isSelected) {
-                    ImGui::SetItemDefaultFocus();
-                }
-            }
-            ImGui::EndCombo();
-        }
-        ImGui::PopItemWidth();
-    }
-
-    ImGui::Spacing();
-    ImGui::Separator();
-
     // ----- Speakers + mute-all -----
     ImGui::TextDisabled(lang == 0 ? "jogadores próximos" : "speakers");
     ImGui::SameLine();
@@ -1623,74 +1481,6 @@ void DrawMinimizedSpeakerList() {
     if (ping < 0) ImGui::TextColored(pingCol, "--");
     else          ImGui::TextColored(pingCol, "%d ms", ping);
 
-    // Calculate space needed for support button.
-    // Priority order:
-    //   1. st.char_name — set directly by the server on auth (most reliable,
-    //      always up-to-date after re-login).
-    //   2. Speaker session cache — async query, may lag by ~50 ms on first
-    //      login, used only as a fallback when char_name is not yet populated.
-    char localName[64] = {0};
-    if (st.char_name[0] != '\0') {
-        std::strncpy(localName, st.char_name, sizeof(localName) - 1);
-    } else {
-        // char_name not populated yet — try the per-session voice cache.
-        GetSpeakerName(st.session_id, localName, sizeof(localName));
-    }
-
-    bool isGm = IsAdminName(localName);
-    const char* supportLabel = isGm ? "Admin" : (lang == 0 ? "Falar com ADM" : "Contact Admin");
-    float supportBtnW = ImGui::CalcTextSize(supportLabel).x + 12.0f;
-
-    // Align to the right side of the window
-    float posX = ImGui::GetWindowWidth() - supportBtnW - ImGui::GetStyle().WindowPadding.x - 4.0f;
-    if (posX > ImGui::GetCursorPosX()) {
-        ImGui::SameLine(posX);
-    } else {
-        ImGui::SameLine();
-    }
-
-    // Styling: Dark background, golden color on hover/active
-    ImGui::PushStyleColor(ImGuiCol_Button,        IM_COL32(0x2a, 0x1f, 0x15, 0xee));
-    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, IM_COL32(0xd4, 0xaf, 0x37, 0xaa));
-    ImGui::PushStyleColor(ImGuiCol_ButtonActive,  IM_COL32(0xd4, 0xaf, 0x37, 0xee));
-    
-    // Render the button (18.0f height to match the text line nicely)
-    if (ImGui::Button(supportLabel, ImVec2(supportBtnW, 18.0f))) {
-        SetSupportWindowOpen(!IsSupportWindowOpen());
-    }
-    ImGui::PopStyleColor(3);
-
-    // Render unread badge if > 0
-    int unreadCount = 0;
-    {
-        std::lock_guard<std::mutex> lk(g_supportMu);
-        if (isGm) {
-            for (const auto& t : g_adminTickets) {
-                unreadCount += t.unread_count;
-            }
-        } else {
-            unreadCount = g_playerChat.unread_count;
-        }
-    }
-    if (unreadCount > 0) {
-        ImVec2 btnMin = ImGui::GetItemRectMin();
-        ImVec2 btnMax = ImGui::GetItemRectMax();
-        ImVec2 center = ImVec2(btnMax.x - 2.0f, btnMin.y + 2.0f);
-        float radius = 7.0f;
-        
-        ImDrawList* drawList = ImGui::GetWindowDrawList();
-        drawList->AddCircleFilled(center, radius, IM_COL32(230, 40, 40, 255));
-        
-        char countStr[16];
-        _snprintf_s(countStr, sizeof(countStr), _TRUNCATE, "%d", unreadCount);
-        ImVec2 textSz = ImGui::CalcTextSize(countStr);
-        ImVec2 textPos = ImVec2(center.x - textSz.x / 2.0f, center.y - textSz.y / 2.0f - 1.0f);
-        
-        ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(255, 255, 255, 255));
-        drawList->AddText(textPos, IM_COL32(255, 255, 255, 255), countStr);
-        ImGui::PopStyleColor();
-    }
-
     ImGui::Separator();
     ImGui::Spacing();
 
@@ -1818,884 +1608,6 @@ void DrawMinimizedSpeakerList() {
     ImGui::PopStyleColor(2);
 }
 
-std::string JsonExtractString(const std::string& json, const std::string& key) {
-    std::string search = "\"" + key + "\":\"";
-    size_t pos = json.find(search);
-    if (pos == std::string::npos) {
-        search = "\"" + key + "\":";
-        pos = json.find(search);
-        if (pos == std::string::npos) return "";
-        pos += search.length();
-        while (pos < json.length() && (json[pos] == ' ' || json[pos] == '"')) {
-            pos++;
-        }
-        size_t end = pos;
-        while (end < json.length() && json[end] != '"' && json[end] != ',' && json[end] != '}' && json[end] != ']') {
-            end++;
-        }
-        return json.substr(pos, end - pos);
-    }
-    pos += search.length();
-    size_t end = pos;
-    while (end < json.length()) {
-        if (json[end] == '\\' && end + 1 < json.length()) {
-            end += 2;
-            continue;
-        }
-        if (json[end] == '"') break;
-        end++;
-    }
-    std::string res = json.substr(pos, end - pos);
-    std::string unescaped = "";
-    for (size_t i = 0; i < res.length(); ++i) {
-        if (res[i] == '\\' && i + 1 < res.length()) {
-            if (res[i+1] == 'n') unescaped += '\n';
-            else if (res[i+1] == '"') unescaped += '"';
-            else if (res[i+1] == '\\') unescaped += '\\';
-            else unescaped += res[i+1];
-            i++;
-        } else {
-            unescaped += res[i];
-        }
-    }
-    return unescaped;
-}
-
-long long JsonExtractInt(const std::string& json, const std::string& key) {
-    std::string search = "\"" + key + "\":";
-    size_t pos = json.find(search);
-    if (pos == std::string::npos) return 0;
-    pos += search.length();
-    while (pos < json.length() && (json[pos] == ' ' || json[pos] == '"')) {
-        pos++;
-    }
-    size_t end = pos;
-    while (end < json.length() && (json[end] == '-' || (json[end] >= '0' && json[end] <= '9'))) {
-        end++;
-    }
-    if (end == pos) return 0;
-    try {
-        return std::stoll(json.substr(pos, end - pos));
-    } catch (...) {
-        return 0;
-    }
-}
-
-std::vector<std::string> JsonExtractArray(const std::string& json, const std::string& key) {
-    std::vector<std::string> items;
-    size_t pos = 0;
-    if (!key.empty()) {
-        std::string search = "\"" + key + "\":[";
-        pos = json.find(search);
-        if (pos == std::string::npos) return items;
-        pos += search.length();
-    } else {
-        pos = json.find('[');
-        if (pos == std::string::npos) return items;
-        pos += 1;
-    }
-    
-    int braceCount = 0;
-    size_t start = std::string::npos;
-    for (size_t i = pos; i < json.length(); ++i) {
-        if (json[i] == '{') {
-            if (braceCount == 0) {
-                start = i;
-            }
-            braceCount++;
-        } else if (json[i] == '}') {
-            braceCount--;
-            if (braceCount == 0 && start != std::string::npos) {
-                items.push_back(json.substr(start, i - start + 1));
-                start = std::string::npos;
-            }
-        } else if (json[i] == ']' && braceCount == 0) {
-            break;
-        }
-    }
-    return items;
-}
-
-std::string escapeJSON(const std::string& s) {
-    std::string out = "";
-    for (char c : s) {
-        if (c == '"') out += "\\\"";
-        else if (c == '\\') out += "\\\\";
-        else if (c == '\n') out += "\\n";
-        else if (c == '\r') out += "\\r";
-        else out += c;
-    }
-    return out;
-}
-
-
-
-bool g_supportLoading = false;
-std::string g_supportError = "";
-std::string g_supportSuccessMsg = "";
-
-int64_t g_lastPollMs = 0;
-std::atomic<bool> g_pollActive{false};
-
-void PollSupportDataAsync(uint32_t player_id, bool isGm) {
-    int64_t now = std::chrono::duration_cast<std::chrono::milliseconds>(
-        std::chrono::steady_clock::now().time_since_epoch()).count();
-    
-    if (now - g_lastPollMs < 2000) return;
-    g_lastPollMs = now;
-    
-    if (g_pollActive.load()) return;
-    g_pollActive.store(true);
-    
-    std::thread([player_id, isGm]() {
-        char host[128] = {0};
-        voice::GetVoiceServerHost(host, sizeof(host));
-        std::string baseUrl = "http://" + std::string(host) + ":50100/support.php?route=";
-        
-        ix::HttpClient httpClient;
-        auto args = std::make_shared<ix::HttpRequestArgs>();
-        args->connectTimeout = 2;
-        args->transferTimeout = 2;
-        
-        Logf("[l2voice] PollSupportDataAsync: player_id=%u isGm=%d baseUrl=%s\n", player_id, isGm, baseUrl.c_str());
-        
-        if (!isGm) {
-            std::string url = baseUrl + "/support/chat?player_id=" + std::to_string(player_id);
-            auto response = httpClient.get(url, args);
-            Logf("[l2voice] PollSupport GET player chat response: statusCode=%d\n", response->statusCode);
-            if (response->statusCode == 200) {
-                std::string body = response->body;
-                SupportChatData chat;
-                chat.id = (int)JsonExtractInt(body, "chat_id");
-                chat.status = (int)JsonExtractInt(body, "status");
-                chat.unread_count = (int)JsonExtractInt(body, "unread_by_player");
-                chat.unread_by_player = chat.unread_count > 0;
-                
-                auto msgs = JsonExtractArray(body, "messages");
-                for (const auto& item : msgs) {
-                    SupportMsg m;
-                    m.sender = JsonExtractString(item, "sender");
-                    m.is_admin = JsonExtractInt(item, "is_admin") == 1;
-                    m.message = JsonExtractString(item, "message");
-                    m.timestamp = JsonExtractInt(item, "timestamp");
-                    chat.messages.push_back(m);
-                }
-                
-                std::lock_guard<std::mutex> lk(g_supportMu);
-                g_playerChat = chat;
-                g_supportError = "";
-            } else {
-                std::lock_guard<std::mutex> lk(g_supportMu);
-                g_supportError = "Conexao offline.";
-            }
-        } else {
-            // GM mode: poll tickets
-            bool success = false;
-            {
-                std::string url = baseUrl + "/support/admin/tickets?player_id=" + std::to_string(player_id);
-                auto response = httpClient.get(url, args);
-                Logf("[l2voice] PollSupport GET admin tickets response: statusCode=%d\n", response->statusCode);
-                if (response->statusCode == 200) {
-                    success = true;
-                    std::string body = response->body;
-                    std::vector<AdminTicket> list;
-                    auto items = JsonExtractArray("{\"items\":" + body + "}", "items");
-                    for (const auto& item : items) {
-                        AdminTicket c;
-                        c.chat_id = (int)JsonExtractInt(item, "chat_id");
-                        c.charId = (int)JsonExtractInt(item, "charId");
-                        c.char_name = JsonExtractString(item, "char_name");
-                        c.status = (int)JsonExtractInt(item, "status");
-                        c.last_message_at = JsonExtractInt(item, "last_message_at");
-                        c.unread_count = (int)JsonExtractInt(item, "unread_by_admin");
-                        c.unread_by_admin = c.unread_count > 0;
-                        list.push_back(c);
-                    }
-                    std::lock_guard<std::mutex> lk(g_supportMu);
-                    g_adminTickets = list;
-                    g_supportError = "";
-                } else {
-                    std::lock_guard<std::mutex> lk(g_supportMu);
-                    g_supportError = "Conexao offline.";
-                }
-            }
-            
-            if (success) {
-                // active GM chat
-                int activeChatId = 0;
-                {
-                    std::lock_guard<std::mutex> lk(g_supportMu);
-                    activeChatId = g_adminSelectedChatId;
-                }
-                if (activeChatId > 0) {
-                    std::string url = baseUrl + "/support/chat?player_id=" + std::to_string(player_id) + "&chat_id=" + std::to_string(activeChatId);
-                    auto response = httpClient.get(url, args);
-                    Logf("[l2voice] PollSupport GET admin active chat response: statusCode=%d\n", response->statusCode);
-                    if (response->statusCode == 200) {
-                        std::string body = response->body;
-                        SupportChatData chat;
-                        chat.id = (int)JsonExtractInt(body, "chat_id");
-                        chat.status = (int)JsonExtractInt(body, "status");
-                        chat.unread_by_player = JsonExtractInt(body, "unread_by_player") == 1;
-                        
-                        auto msgs = JsonExtractArray(body, "messages");
-                        for (const auto& item : msgs) {
-                            SupportMsg m;
-                            m.sender = JsonExtractString(item, "sender");
-                            m.is_admin = JsonExtractInt(item, "is_admin") == 1;
-                            m.message = JsonExtractString(item, "message");
-                            m.timestamp = JsonExtractInt(item, "timestamp");
-                            chat.messages.push_back(m);
-                        }
-                        std::lock_guard<std::mutex> lk(g_supportMu);
-                        g_adminActiveChat = chat;
-                    }
-                }
-                
-                // staff group
-                {
-                    std::string url = baseUrl + "/support/admin/group?player_id=" + std::to_string(player_id);
-                    auto response = httpClient.get(url, args);
-                    Logf("[l2voice] PollSupport GET admin group chat response: statusCode=%d\n", response->statusCode);
-                    if (response->statusCode == 200) {
-                        std::string body = response->body;
-                        std::vector<AdminGroupMsg> list;
-                        auto items = JsonExtractArray("{\"items\":" + body + "}", "items");
-                        for (const auto& item : items) {
-                            AdminGroupMsg m;
-                            m.sender = JsonExtractString(item, "sender");
-                            m.message = JsonExtractString(item, "message");
-                            m.timestamp = JsonExtractInt(item, "timestamp");
-                            list.push_back(m);
-                        }
-                        std::lock_guard<std::mutex> lk(g_supportMu);
-                        g_adminGroupMsgs = list;
-                    }
-                }
-                
-                // bugs
-                {
-                    std::string url = baseUrl + "/support/admin/bugs?player_id=" + std::to_string(player_id);
-                    auto response = httpClient.get(url, args);
-                    Logf("[l2voice] PollSupport GET admin bug reports response: statusCode=%d\n", response->statusCode);
-                    if (response->statusCode == 200) {
-                        std::string body = response->body;
-                        std::vector<BugReportData> list;
-                        auto items = JsonExtractArray("{\"items\":" + body + "}", "items");
-                        for (const auto& item : items) {
-                            BugReportData b;
-                            b.bug_id = (int)JsonExtractInt(item, "bug_id");
-                            b.title = JsonExtractString(item, "title");
-                            b.description = JsonExtractString(item, "description");
-                            b.reporter = JsonExtractString(item, "reporter");
-                            b.category = (int)JsonExtractInt(item, "category");
-                            b.priority = (int)JsonExtractInt(item, "priority");
-                            b.assigned_to = (int)JsonExtractInt(item, "assigned_to");
-                            b.status = (int)JsonExtractInt(item, "status");
-                            b.created_at = JsonExtractInt(item, "created_at");
-                            b.last_updated = JsonExtractInt(item, "last_updated");
-                            list.push_back(b);
-                        }
-                        std::lock_guard<std::mutex> lk(g_supportMu);
-                        g_bugReports = list;
-                    }
-                }
-                
-                // bug comments
-                int activeBugId = 0;
-                {
-                    std::lock_guard<std::mutex> lk(g_supportMu);
-                    activeBugId = g_adminSelectedBugId;
-                }
-                if (activeBugId > 0) {
-                    std::string url = baseUrl + "/support/admin/bugs?player_id=" + std::to_string(player_id) + "&bug_id=" + std::to_string(activeBugId);
-                    auto response = httpClient.get(url, args);
-                    Logf("[l2voice] PollSupport GET admin bug comments response: statusCode=%d\n", response->statusCode);
-                    if (response->statusCode == 200) {
-                        std::string body = response->body;
-                        std::vector<BugCommentData> list;
-                        auto items = JsonExtractArray("{\"items\":" + body + "}", "items");
-                        for (const auto& item : items) {
-                            BugCommentData c;
-                            c.comment_id = (int)JsonExtractInt(item, "comment_id");
-                            c.sender = JsonExtractString(item, "sender");
-                            c.comment = JsonExtractString(item, "comment");
-                            c.timestamp = JsonExtractInt(item, "timestamp");
-                            list.push_back(c);
-                        }
-                        std::lock_guard<std::mutex> lk(g_supportMu);
-                        g_bugComments = list;
-                    }
-                }
-            }
-        }
-        
-        g_pollActive.store(false);
-    }).detach();
-}
-
-void SendPlayerMessageAsync(uint32_t player_id, const std::string& message) {
-    Logf("[l2voice] SendPlayerMessageAsync: player_id=%u message=%s\n", player_id, message.c_str());
-    std::thread([player_id, message]() {
-        char host[128] = {0};
-        voice::GetVoiceServerHost(host, sizeof(host));
-        std::string url = "http://" + std::string(host) + ":50100/support.php?route=/support/chat";
-        
-        ix::HttpClient httpClient;
-        auto args = std::make_shared<ix::HttpRequestArgs>();
-        args->connectTimeout = 5;
-        args->transferTimeout = 5;
-        std::string body = "{\"player_id\":" + std::to_string(player_id) + ",\"message\":\"" + escapeJSON(message) + "\"}";
-        auto response = httpClient.post(url, body, args);
-        Logf("[l2voice] SendPlayerMessageAsync POST response: statusCode=%d\n", response->statusCode);
-        if (response->statusCode == 200) {
-            g_lastPollMs = 0;
-        }
-    }).detach();
-}
-
-void SendReportBugAsync(uint32_t player_id, const std::string& title, const std::string& desc, int cat, int prio) {
-    Logf("[l2voice] SendReportBugAsync: player_id=%u title=%s\n", player_id, title.c_str());
-    std::thread([player_id, title, desc, cat, prio]() {
-        char host[128] = {0};
-        voice::GetVoiceServerHost(host, sizeof(host));
-        std::string url = "http://" + std::string(host) + ":50100/support.php?route=/support/report_bug";
-        
-        ix::HttpClient httpClient;
-        auto args = std::make_shared<ix::HttpRequestArgs>();
-        args->connectTimeout = 5;
-        args->transferTimeout = 5;
-        std::string body = "{\"player_id\":" + std::to_string(player_id) + 
-                           ",\"title\":\"" + escapeJSON(title) + 
-                           "\",\"description\":\"" + escapeJSON(desc) + 
-                           "\",\"category\":" + std::to_string(cat) + 
-                           ",\"priority\":" + std::to_string(prio) + "}";
-        auto response = httpClient.post(url, body, args);
-        Logf("[l2voice] SendReportBugAsync POST response: statusCode=%d\n", response->statusCode);
-        std::lock_guard<std::mutex> lk(g_supportMu);
-        if (response->statusCode == 200) {
-            g_supportSuccessMsg = "Bug reportado!";
-            g_supportError = "";
-        } else {
-            g_supportError = "Erro ao enviar.";
-        }
-    }).detach();
-}
-
-void SendAdminReplyAsync(uint32_t player_id, int chat_id, const std::string& message) {
-    Logf("[l2voice] SendAdminReplyAsync: player_id=%u chat_id=%d message=%s\n", player_id, chat_id, message.c_str());
-    std::thread([player_id, chat_id, message]() {
-        char host[128] = {0};
-        voice::GetVoiceServerHost(host, sizeof(host));
-        std::string url = "http://" + std::string(host) + ":50100/support.php?route=/support/admin/reply";
-        
-        ix::HttpClient httpClient;
-        auto args = std::make_shared<ix::HttpRequestArgs>();
-        args->connectTimeout = 5;
-        args->transferTimeout = 5;
-        std::string body = "{\"player_id\":" + std::to_string(player_id) + 
-                           ",\"chat_id\":" + std::to_string(chat_id) + 
-                           ",\"message\":\"" + escapeJSON(message) + "\"}";
-        auto response = httpClient.post(url, body, args);
-        Logf("[l2voice] SendAdminReplyAsync POST response: statusCode=%d\n", response->statusCode);
-        if (response->statusCode == 200) {
-            g_lastPollMs = 0;
-        }
-    }).detach();
-}
-
-void SendAdminCloseChatAsync(uint32_t player_id, int chat_id) {
-    Logf("[l2voice] SendAdminCloseChatAsync: player_id=%u chat_id=%d\n", player_id, chat_id);
-    std::thread([player_id, chat_id]() {
-        char host[128] = {0};
-        voice::GetVoiceServerHost(host, sizeof(host));
-        std::string url = "http://" + std::string(host) + ":50100/support.php?route=/support/admin/close";
-        
-        ix::HttpClient httpClient;
-        auto args = std::make_shared<ix::HttpRequestArgs>();
-        args->connectTimeout = 5;
-        args->transferTimeout = 5;
-        std::string body = "{\"player_id\":" + std::to_string(player_id) + 
-                           ",\"chat_id\":" + std::to_string(chat_id) + "}";
-        auto response = httpClient.post(url, body, args);
-        Logf("[l2voice] SendAdminCloseChatAsync POST response: statusCode=%d\n", response->statusCode);
-        if (response->statusCode == 200) {
-            g_lastPollMs = 0;
-        }
-    }).detach();
-}
-
-void SendAdminReopenChatAsync(uint32_t player_id, int chat_id) {
-    Logf("[l2voice] SendAdminReopenChatAsync: player_id=%u chat_id=%d\n", player_id, chat_id);
-    std::thread([player_id, chat_id]() {
-        char host[128] = {0};
-        voice::GetVoiceServerHost(host, sizeof(host));
-        std::string url = "http://" + std::string(host) + ":50100/support.php?route=/support/admin/reopen";
-        
-        ix::HttpClient httpClient;
-        auto args = std::make_shared<ix::HttpRequestArgs>();
-        args->connectTimeout = 5;
-        args->transferTimeout = 5;
-        std::string body = "{\"player_id\":" + std::to_string(player_id) + 
-                           ",\"chat_id\":" + std::to_string(chat_id) + "}";
-        auto response = httpClient.post(url, body, args);
-        Logf("[l2voice] SendAdminReopenChatAsync POST response: statusCode=%d\n", response->statusCode);
-        if (response->statusCode == 200) {
-            g_lastPollMs = 0;
-        }
-    }).detach();
-}
-
-void SendAdminGroupMsgAsync(uint32_t player_id, const std::string& message) {
-    Logf("[l2voice] SendAdminGroupMsgAsync: player_id=%u message=%s\n", player_id, message.c_str());
-    std::thread([player_id, message]() {
-        char host[128] = {0};
-        voice::GetVoiceServerHost(host, sizeof(host));
-        std::string url = "http://" + std::string(host) + ":50100/support.php?route=/support/admin/group";
-        
-        ix::HttpClient httpClient;
-        auto args = std::make_shared<ix::HttpRequestArgs>();
-        args->connectTimeout = 5;
-        args->transferTimeout = 5;
-        std::string body = "{\"player_id\":" + std::to_string(player_id) + 
-                           ",\"message\":\"" + escapeJSON(message) + "\"}";
-        auto response = httpClient.post(url, body, args);
-        Logf("[l2voice] SendAdminGroupMsgAsync POST response: statusCode=%d\n", response->statusCode);
-        if (response->statusCode == 200) {
-            g_lastPollMs = 0;
-        }
-    }).detach();
-}
-
-void SendBugCommentAsync(uint32_t player_id, int bug_id, const std::string& comment) {
-    Logf("[l2voice] SendBugCommentAsync: player_id=%u bug_id=%d comment=%s\n", player_id, bug_id, comment.c_str());
-    std::thread([player_id, bug_id, comment]() {
-        char host[128] = {0};
-        voice::GetVoiceServerHost(host, sizeof(host));
-        std::string url = "http://" + std::string(host) + ":50100/support.php?route=/support/admin/bug/comment";
-        
-        ix::HttpClient httpClient;
-        auto args = std::make_shared<ix::HttpRequestArgs>();
-        args->connectTimeout = 5;
-        args->transferTimeout = 5;
-        std::string body = "{\"player_id\":" + std::to_string(player_id) + 
-                           ",\"bug_id\":" + std::to_string(bug_id) + 
-                           ",\"comment\":\"" + escapeJSON(comment) + "\"}";
-        auto response = httpClient.post(url, body, args);
-        Logf("[l2voice] SendBugCommentAsync POST response: statusCode=%d\n", response->statusCode);
-        if (response->statusCode == 200) {
-            g_lastPollMs = 0;
-        }
-    }).detach();
-}
-
-void SendBugUpdateAsync(uint32_t player_id, int bug_id, int status, int priority, int category) {
-    Logf("[l2voice] SendBugUpdateAsync: player_id=%u bug_id=%d status=%d priority=%d category=%d\n", player_id, bug_id, status, priority, category);
-    std::thread([player_id, bug_id, status, priority, category]() {
-        char host[128] = {0};
-        voice::GetVoiceServerHost(host, sizeof(host));
-        std::string url = "http://" + std::string(host) + ":50100/support.php?route=/support/admin/bug/update";
-        
-        ix::HttpClient httpClient;
-        auto args = std::make_shared<ix::HttpRequestArgs>();
-        args->connectTimeout = 5;
-        args->transferTimeout = 5;
-        std::string body = "{\"player_id\":" + std::to_string(player_id) + 
-                           ",\"bug_id\":" + std::to_string(bug_id) + 
-                           ",\"status\":" + std::to_string(status) + 
-                           ",\"priority\":" + std::to_string(priority) + 
-                           ",\"category\":" + std::to_string(category) + "}";
-        auto response = httpClient.post(url, body, args);
-        Logf("[l2voice] SendBugUpdateAsync POST response: statusCode=%d\n", response->statusCode);
-        if (response->statusCode == 200) {
-            g_lastPollMs = 0;
-        }
-    }).detach();
-}
-
-void DrawSupportWindow() {
-    if (!IsSupportWindowOpen()) return;
-    int lang = g_language.load();
-    OverlayState st = SnapshotOverlayState();
-    
-    char localName[64] = {0};
-    // Prefer char_name (set directly by server auth) over async session cache.
-    if (st.char_name[0] != '\0') {
-        std::strncpy(localName, st.char_name, sizeof(localName) - 1);
-    } else {
-        GetSpeakerName(st.session_id, localName, sizeof(localName));
-    }
-    
-    bool isGm = IsAdminName(localName);
-    
-    PollSupportDataAsync(st.player_id, isGm);
-    
-    ImGui::SetNextWindowSize(ImVec2(650, 450), ImGuiCond_FirstUseEver);
-    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.04f, 0.04f, 0.04f, 0.94f));
-    ImGui::PushStyleColor(ImGuiCol_Border,   ImVec4(0.83f, 0.68f, 0.21f, 0.8f));
-    ImGui::PushStyleColor(ImGuiCol_TitleBg,  ImVec4(0.12f, 0.09f, 0.06f, 1.0f));
-    ImGui::PushStyleColor(ImGuiCol_TitleBgActive, ImVec4(0.18f, 0.14f, 0.09f, 1.0f));
-    
-    bool keepOpen = true;
-    const char* winTitle = isGm ? (lang == 0 ? "Painel Administrativo" : "Admin Panel") 
-                                : (lang == 0 ? "Central de Suporte" : "Support Center");
-                                
-    if (ImGui::Begin(winTitle, &keepOpen, ImGuiWindowFlags_NoCollapse)) {
-        if (!keepOpen) {
-            SetSupportWindowOpen(false);
-        }
-        
-        std::string errStr;
-        {
-            std::lock_guard<std::mutex> lk(g_supportMu);
-            errStr = g_supportError;
-        }
-        if (!errStr.empty()) {
-            ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "%s", errStr.c_str());
-            ImGui::Separator();
-        }
-        
-        if (!isGm) {
-            static int playerTab = 0;
-            ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(10, 6));
-            if (ImGui::Button(lang == 0 ? "Falar com ADM" : "Chat with Admin", ImVec2(150, 30))) playerTab = 0;
-            ImGui::SameLine();
-            if (ImGui::Button(lang == 0 ? "Reportar Bug" : "Report a Bug", ImVec2(150, 30))) playerTab = 1;
-            ImGui::PopStyleVar();
-            
-            ImGui::Separator();
-            ImGui::Spacing();
-            
-            if (playerTab == 0) {
-                SupportChatData chat;
-                {
-                    std::lock_guard<std::mutex> lk(g_supportMu);
-                    chat = g_playerChat;
-                }
-                
-                ImGui::TextDisabled(lang == 0 ? "Status do Atendimento:" : "Ticket Status:");
-                ImGui::SameLine();
-                const char* statusStr = "Nenhum";
-                ImVec4 statusCol = ImVec4(0.7f, 0.7f, 0.7f, 1.0f);
-                if (chat.status == 0 || chat.status == 3) {
-                    statusStr = lang == 0 ? "Aberto" : "Open";
-                    statusCol = ImVec4(0.3f, 0.8f, 0.3f, 1.0f);
-                } else if (chat.status == 1) {
-                    statusStr = lang == 0 ? "Aguardando Admin" : "Waiting for Admin";
-                    statusCol = ImVec4(1.0f, 0.6f, 0.2f, 1.0f);
-                } else if (chat.status == 2) {
-                    statusStr = lang == 0 ? "Aguardando Jogador" : "Waiting for Player";
-                    statusCol = ImVec4(0.2f, 0.6f, 1.0f, 1.0f);
-                } else if (chat.status == 4) {
-                    statusStr = lang == 0 ? "Encerrado" : "Closed";
-                    statusCol = ImVec4(0.6f, 0.6f, 0.6f, 1.0f);
-                }
-                ImGui::TextColored(statusCol, "%s", statusStr);
-                
-                ImGui::BeginChild("##player_chat_log", ImVec2(0, -40), true);
-                for (const auto& msg : chat.messages) {
-                    if (msg.is_admin) {
-                        ImGui::TextColored(ImVec4(0.83f, 0.68f, 0.21f, 1.0f), "[ADMIN] %s:", msg.sender.c_str());
-                    } else {
-                        ImGui::TextColored(ImVec4(0.4f, 0.8f, 1.0f, 1.0f), "%s:", msg.sender.c_str());
-                    }
-                    ImGui::SameLine();
-                    ImGui::TextUnformatted(msg.message.c_str());
-                }
-                ImGui::SetScrollHereY(1.0f);
-                ImGui::EndChild();
-                
-                static char chatInput[256] = "";
-                ImGui::PushItemWidth(-100);
-                if (ImGui::InputText("##player_chat_input", chatInput, sizeof(chatInput), ImGuiInputTextFlags_EnterReturnsTrue)) {
-                    if (chatInput[0] != '\0') {
-                        SendPlayerMessageAsync(st.player_id, chatInput);
-                        chatInput[0] = '\0';
-                    }
-                }
-                ImGui::PopItemWidth();
-                ImGui::SameLine();
-                if (ImGui::Button(lang == 0 ? "Enviar" : "Send", ImVec2(90, 22))) {
-                    if (chatInput[0] != '\0') {
-                        SendPlayerMessageAsync(st.player_id, chatInput);
-                        chatInput[0] = '\0';
-                    }
-                }
-            } else if (playerTab == 1) {
-                static char bugTitle[128] = "";
-                static char bugDesc[512] = "";
-                static int bugCat = 8;
-                static int bugPrio = 1;
-                
-                ImGui::TextUnformatted(lang == 0 ? "Titulo do Bug:" : "Bug Title:");
-                ImGui::InputText("##bug_title", bugTitle, sizeof(bugTitle));
-                
-                ImGui::TextUnformatted(lang == 0 ? "Descricao do Ocorrido:" : "Description:");
-                ImGui::InputTextMultiline("##bug_desc", bugDesc, sizeof(bugDesc), ImVec2(0, 120));
-                
-                const char* categories[] = { "Gameplay", "Quest", "NPC", "Skill", "Event", "Interface", "Economy", "Exploit", "Other" };
-                ImGui::TextUnformatted(lang == 0 ? "Categoria:" : "Category:");
-                ImGui::Combo("##bug_cat", &bugCat, categories, IM_ARRAYSIZE(categories));
-                
-                const char* priorities[] = { "Low", "Normal", "High", "Critical" };
-                ImGui::TextUnformatted(lang == 0 ? "Prioridade:" : "Priority:");
-                ImGui::Combo("##bug_prio", &bugPrio, priorities, IM_ARRAYSIZE(priorities));
-                
-                std::string successStr;
-                {
-                    std::lock_guard<std::mutex> lk(g_supportMu);
-                    successStr = g_supportSuccessMsg;
-                }
-                if (!successStr.empty()) {
-                    ImGui::TextColored(ImVec4(0.3f, 0.8f, 0.3f, 1.0f), "%s", successStr.c_str());
-                }
-                
-                if (ImGui::Button(lang == 0 ? "Enviar Relatorio" : "Submit Report", ImVec2(180, 30))) {
-                    if (bugTitle[0] != '\0' && bugDesc[0] != '\0') {
-                        SendReportBugAsync(st.player_id, bugTitle, bugDesc, bugCat, bugPrio);
-                        bugTitle[0] = '\0';
-                        bugDesc[0] = '\0';
-                    }
-                }
-            }
-        } else {
-            static int gmTab = 0;
-            ImGui::Columns(2, "##gm_panel_split", true);
-            static bool initialColumnWidthSet = false;
-            if (!initialColumnWidthSet) {
-                ImGui::SetColumnWidth(0, 150.0f);
-                initialColumnWidthSet = true;
-            }
-            
-            ImGui::BeginChild("##gm_sidebar", ImVec2(0, 0), true);
-            if (ImGui::Selectable(lang == 0 ? "Atendimentos" : "Tickets", gmTab == 0)) gmTab = 0;
-            ImGui::Spacing();
-            if (ImGui::Selectable(lang == 0 ? "Chat Staff" : "Staff Chat", gmTab == 1)) gmTab = 1;
-            ImGui::Spacing();
-            if (ImGui::Selectable(lang == 0 ? "Bugs Relatados" : "Bug Tracker", gmTab == 2)) gmTab = 2;
-            ImGui::EndChild();
-            
-            ImGui::NextColumn();
-            
-            ImGui::BeginChild("##gm_content", ImVec2(0, 0), false);
-            if (gmTab == 0) {
-                std::vector<AdminTicket> tickets;
-                {
-                    std::lock_guard<std::mutex> lk(g_supportMu);
-                    tickets = g_adminTickets;
-                }
-                
-                ImGui::Columns(2, "##gm_tickets_split", true);
-                ImGui::BeginChild("##gm_tickets_sublist", ImVec2(0, 0), true);
-                for (const auto& t : tickets) {
-                    char label[128];
-                    const char* statLabel = t.status == 4 ? "[x]" : t.unread_by_admin ? "[!]" : "[ ]";
-                    _snprintf_s(label, sizeof(label), _TRUNCATE, "%s %s", statLabel, t.char_name.c_str());
-                    
-                    bool isSelected = (g_adminSelectedChatId == t.chat_id);
-                    if (ImGui::Selectable(label, isSelected)) {
-                        std::lock_guard<std::mutex> lk(g_supportMu);
-                        g_adminSelectedChatId = t.chat_id;
-                    }
-                }
-                ImGui::EndChild();
-                ImGui::NextColumn();
-                
-                ImGui::BeginChild("##gm_ticket_chat_feed", ImVec2(0, 0), false);
-                if (g_adminSelectedChatId > 0) {
-                    SupportChatData activeChat;
-                    {
-                        std::lock_guard<std::mutex> lk(g_supportMu);
-                        activeChat = g_adminActiveChat;
-                    }
-                    
-                    ImGui::Text(lang == 0 ? "Atendimento #%d" : "Ticket #%d", activeChat.id);
-                    ImGui::SameLine();
-                    if (activeChat.status != 4) {
-                        if (ImGui::SmallButton(lang == 0 ? "Fechar" : "Close")) {
-                            SendAdminCloseChatAsync(st.player_id, activeChat.id);
-                        }
-                    } else {
-                        if (ImGui::SmallButton(lang == 0 ? "Reabrir" : "Reopen")) {
-                            SendAdminReopenChatAsync(st.player_id, activeChat.id);
-                        }
-                    }
-                    
-                    ImGui::Separator();
-                    ImGui::BeginChild("##gm_ticket_messages", ImVec2(0, -40), true);
-                    for (const auto& msg : activeChat.messages) {
-                        if (msg.is_admin) {
-                            ImGui::TextColored(ImVec4(0.83f, 0.68f, 0.21f, 1.0f), "%s:", msg.sender.c_str());
-                        } else {
-                            ImGui::TextColored(ImVec4(0.4f, 0.8f, 1.0f, 1.0f), "%s:", msg.sender.c_str());
-                        }
-                        ImGui::SameLine();
-                        ImGui::TextUnformatted(msg.message.c_str());
-                    }
-                    ImGui::SetScrollHereY(1.0f);
-                    ImGui::EndChild();
-                    
-                    static char gmReplyInput[256] = "";
-                    ImGui::PushItemWidth(-80);
-                    if (ImGui::InputText("##gm_reply_input", gmReplyInput, sizeof(gmReplyInput), ImGuiInputTextFlags_EnterReturnsTrue)) {
-                        if (gmReplyInput[0] != '\0') {
-                            SendAdminReplyAsync(st.player_id, activeChat.id, gmReplyInput);
-                            gmReplyInput[0] = '\0';
-                        }
-                    }
-                    ImGui::PopItemWidth();
-                    ImGui::SameLine();
-                    if (ImGui::Button(lang == 0 ? "Resp" : "Reply", ImVec2(70, 22))) {
-                        if (gmReplyInput[0] != '\0') {
-                            SendAdminReplyAsync(st.player_id, activeChat.id, gmReplyInput);
-                            gmReplyInput[0] = '\0';
-                        }
-                    }
-                } else {
-                    ImGui::TextDisabled(lang == 0 ? "Selecione um ticket ao lado" : "Select a ticket from the list");
-                }
-                ImGui::EndChild();
-                ImGui::Columns(1);
-            } else if (gmTab == 1) {
-                std::vector<AdminGroupMsg> groupMsgs;
-                {
-                    std::lock_guard<std::mutex> lk(g_supportMu);
-                    groupMsgs = g_adminGroupMsgs;
-                }
-                
-                ImGui::BeginChild("##gm_group_chat_feed", ImVec2(0, -40), true);
-                for (const auto& msg : groupMsgs) {
-                    if (msg.sender == "[SYSTEM]") {
-                        ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f), "[SISTEMA] %s", msg.message.c_str());
-                    } else {
-                        ImGui::TextColored(ImVec4(0.83f, 0.68f, 0.21f, 1.0f), "%s:", msg.sender.c_str());
-                        ImGui::SameLine();
-                        ImGui::TextUnformatted(msg.message.c_str());
-                    }
-                }
-                ImGui::SetScrollHereY(1.0f);
-                ImGui::EndChild();
-                
-                static char staffInput[256] = "";
-                ImGui::PushItemWidth(-90);
-                if (ImGui::InputText("##staff_chat_input", staffInput, sizeof(staffInput), ImGuiInputTextFlags_EnterReturnsTrue)) {
-                    if (staffInput[0] != '\0') {
-                        SendAdminGroupMsgAsync(st.player_id, staffInput);
-                        staffInput[0] = '\0';
-                    }
-                }
-                ImGui::PopItemWidth();
-                ImGui::SameLine();
-                if (ImGui::Button(lang == 0 ? "Enviar" : "Send", ImVec2(80, 22))) {
-                    if (staffInput[0] != '\0') {
-                        SendAdminGroupMsgAsync(st.player_id, staffInput);
-                        staffInput[0] = '\0';
-                    }
-                }
-            } else if (gmTab == 2) {
-                std::vector<BugReportData> bugs;
-                {
-                    std::lock_guard<std::mutex> lk(g_supportMu);
-                    bugs = g_bugReports;
-                }
-                
-                ImGui::Columns(2, "##gm_bugs_split", true);
-                ImGui::BeginChild("##gm_bugs_sublist", ImVec2(0, 0), true);
-                for (const auto& b : bugs) {
-                    char label[128];
-                    const char* statLabel = b.status == 2 ? "[v]" : b.status == 3 ? "[x]" : "[*]";
-                    _snprintf_s(label, sizeof(label), _TRUNCATE, "%s %s", statLabel, b.title.c_str());
-                    
-                    bool isSelected = (g_adminSelectedBugId == b.bug_id);
-                    if (ImGui::Selectable(label, isSelected)) {
-                        std::lock_guard<std::mutex> lk(g_supportMu);
-                        g_adminSelectedBugId = b.bug_id;
-                    }
-                }
-                ImGui::EndChild();
-                ImGui::NextColumn();
-                
-                ImGui::BeginChild("##gm_bug_details_pane", ImVec2(0, 0), false);
-                if (g_adminSelectedBugId > 0) {
-                    BugReportData b;
-                    bool found = false;
-                    for (const auto& item : bugs) {
-                        if (item.bug_id == g_adminSelectedBugId) {
-                            b = item;
-                            found = true;
-                            break;
-                        }
-                    }
-                    
-                    if (found) {
-                        ImGui::Text("Bug #%d: %s", b.bug_id, b.title.c_str());
-                        ImGui::TextDisabled("Reporter: %s", b.reporter.c_str());
-                        ImGui::Separator();
-                        ImGui::Spacing();
-                        
-                        ImGui::TextWrapped("Desc: %s", b.description.c_str());
-                        ImGui::Spacing();
-                        
-                        int curStatus = b.status;
-                        const char* bugStatuses[] = { "Aberto", "Em Analise", "Corrigido", "Fechado" };
-                        if (ImGui::Combo("Status", &curStatus, bugStatuses, IM_ARRAYSIZE(bugStatuses))) {
-                            SendBugUpdateAsync(st.player_id, b.bug_id, curStatus, b.priority, b.category);
-                        }
-                        
-                        int curPriority = b.priority;
-                        const char* bugPriorities[] = { "Low", "Normal", "High", "Critical" };
-                        if (ImGui::Combo("Prio", &curPriority, bugPriorities, IM_ARRAYSIZE(bugPriorities))) {
-                            SendBugUpdateAsync(st.player_id, b.bug_id, b.status, curPriority, b.category);
-                        }
-                        
-                        ImGui::Separator();
-                        ImGui::TextUnformatted(lang == 0 ? "Comentarios:" : "Comments:");
-                        
-                        std::vector<BugCommentData> comments;
-                        {
-                            std::lock_guard<std::mutex> lk(g_supportMu);
-                            comments = g_bugComments;
-                        }
-                        ImGui::BeginChild("##gm_bug_comments_log", ImVec2(0, 100), true);
-                        for (const auto& c : comments) {
-                            ImGui::TextColored(ImVec4(0.83f, 0.68f, 0.21f, 1.0f), "%s:", c.sender.c_str());
-                            ImGui::SameLine();
-                            ImGui::TextUnformatted(c.comment.c_str());
-                        }
-                        ImGui::SetScrollHereY(1.0f);
-                        ImGui::EndChild();
-                        
-                        static char bugCommentInput[256] = "";
-                        ImGui::PushItemWidth(-80);
-                        if (ImGui::InputText("##bug_comment_input", bugCommentInput, sizeof(bugCommentInput), ImGuiInputTextFlags_EnterReturnsTrue)) {
-                            if (bugCommentInput[0] != '\0') {
-                                SendBugCommentAsync(st.player_id, b.bug_id, bugCommentInput);
-                                bugCommentInput[0] = '\0';
-                            }
-                        }
-                        ImGui::PopItemWidth();
-                        ImGui::SameLine();
-                        if (ImGui::Button("Add", ImVec2(70, 22))) {
-                            if (bugCommentInput[0] != '\0') {
-                                SendBugCommentAsync(st.player_id, b.bug_id, bugCommentInput);
-                                bugCommentInput[0] = '\0';
-                            }
-                        }
-                    }
-                } else {
-                    ImGui::TextDisabled(lang == 0 ? "Selecione um bug ao lado" : "Select a bug from the list");
-                }
-                ImGui::EndChild();
-                ImGui::Columns(1);
-            }
-            ImGui::EndChild();
-            ImGui::Columns(1);
-        }
-    }
-    ImGui::End();
-    ImGui::PopStyleColor(4);
-}
-
 void DrawPanel() {
     int lang = g_language.load();
     // The mode banner is independent of panel visibility — it stays
@@ -2705,39 +1617,19 @@ void DrawPanel() {
     // Toasts likewise — always rendered while there are active ones.
     DrawToasts();
 
-    DrawSupportWindow();
-
-    // Background poll every 10 seconds to keep unread badges updated.
-    OverlayState st = SnapshotOverlayState();
-    if (st.ws_connected && st.player_id > 0) {
-        static int64_t lastBgPollMs = 0;
-        int64_t now = std::chrono::duration_cast<std::chrono::milliseconds>(
-            std::chrono::steady_clock::now().time_since_epoch()).count();
-        if (now - lastBgPollMs > 10000) {
-            lastBgPollMs = now;
-            char localName[64] = {0};
-            if (st.char_name[0] != '\0') {
-                std::strncpy(localName, st.char_name, sizeof(localName) - 1);
-            } else {
-                GetSpeakerName(st.session_id, localName, sizeof(localName));
-            }
-            PollSupportDataAsync(st.player_id, IsAdminName(localName));
-        }
-    }
-
     if (g_minimized.load()) {
         DrawMinimized();
         DrawMinimizedSpeakerList();
         return;
     }
 
-    st = SnapshotOverlayState();
+    OverlayState st = SnapshotOverlayState();
 
     // Fixed-size window. Title bar enabled (= draggable, shows
     // connection status), no collapse triangle, no resize grip. The
     // minimize "_" button is rendered manually as an overlay on the
     // title-bar pixels (see below).
-    ImGui::SetNextWindowSize(ImVec2(320, 400), ImGuiCond_Always);
+    ImGui::SetNextWindowSize(ImVec2(320, 480), ImGuiCond_Always);
     char titleBuf[64];
     _snprintf_s(titleBuf, sizeof(titleBuf), _TRUNCATE,
         "l2voice  %s###l2voice_window",
@@ -2941,6 +1833,63 @@ void DrawPanel() {
             }
         }
     }
+
+    ImGui::Separator();
+    
+    // ====== Audio Devices ======
+    ImGui::TextDisabled(lang == 0 ? "Dispositivos de Áudio" : "Audio Devices");
+    ImGui::SameLine(ImGui::GetWindowWidth() - 75.0f);
+    
+    static std::vector<std::string> s_captureDevices;
+    static std::vector<std::string> s_playbackDevices;
+    static bool s_devicesLoaded = false;
+    
+    if (ImGui::SmallButton(lang == 0 ? "Atualizar" : "Refresh")) {
+        s_captureDevices = GetCaptureDeviceList();
+        s_playbackDevices = GetPlaybackDeviceList();
+        s_devicesLoaded = true;
+    }
+    
+    if (!s_devicesLoaded) {
+        s_captureDevices = GetCaptureDeviceList();
+        s_playbackDevices = GetPlaybackDeviceList();
+        s_devicesLoaded = true;
+    }
+
+    const char* currentCapture = st.capture_device;
+    const char* currentPlayback = st.playback_device;
+
+    ImGui::PushItemWidth(-1.0f);
+    
+    if (ImGui::BeginCombo("##mic_combo", currentCapture[0] == '\0' ? (lang == 0 ? "Microfone: Padrão" : "Mic: Default") : currentCapture)) {
+        bool isDefaultSelected = (currentCapture[0] == '\0');
+        if (ImGui::Selectable(lang == 0 ? "Padrão do Sistema" : "System Default", isDefaultSelected)) {
+            SetCaptureDevice("");
+        }
+        for (const auto& dev : s_captureDevices) {
+            bool isSelected = (strcmp(currentCapture, dev.c_str()) == 0);
+            if (ImGui::Selectable(dev.c_str(), isSelected)) {
+                SetCaptureDevice(dev.c_str());
+            }
+        }
+        ImGui::EndCombo();
+    }
+    
+    if (ImGui::BeginCombo("##spk_combo", currentPlayback[0] == '\0' ? (lang == 0 ? "Fone/Caixa: Padrão" : "Audio: Default") : currentPlayback)) {
+        bool isDefaultSelected = (currentPlayback[0] == '\0');
+        if (ImGui::Selectable(lang == 0 ? "Padrão do Sistema" : "System Default", isDefaultSelected)) {
+            SetPlaybackDevice("");
+        }
+        for (const auto& dev : s_playbackDevices) {
+            bool isSelected = (strcmp(currentPlayback, dev.c_str()) == 0);
+            if (ImGui::Selectable(dev.c_str(), isSelected)) {
+                SetPlaybackDevice(dev.c_str());
+            }
+        }
+        ImGui::EndCombo();
+    }
+    
+    ImGui::PopItemWidth();
 
     ImGui::Separator();
     
@@ -3321,107 +2270,76 @@ HRESULT WINAPI HookReset(IDirect3DDevice9* dev, D3DPRESENT_PARAMETERS* pp) {
     return hr;
 }
 
-using PFN_Direct3DCreate9 = IDirect3D9*(WINAPI*)(UINT);
-PFN_Direct3DCreate9 g_origDirect3DCreate9 = nullptr;
+bool GetDeviceVTableEntries(void*& endSceneOut, void*& resetOut) {
+    using PFN_Direct3DCreate9 = IDirect3D9*(WINAPI*)(UINT);
+    HMODULE d3d9 = LoadLibraryA("d3d9.dll");
+    if (!d3d9) return false;
+    auto pCreate = reinterpret_cast<PFN_Direct3DCreate9>(
+        GetProcAddress(d3d9, "Direct3DCreate9"));
+    if (!pCreate) return false;
+    IDirect3D9* d3d = pCreate(D3D_SDK_VERSION);
+    if (!d3d) return false;
 
-using PFN_CreateDevice = HRESULT(WINAPI*)(IDirect3D9*, UINT, D3DDEVTYPE, HWND, DWORD, D3DPRESENT_PARAMETERS*, IDirect3DDevice9**);
-PFN_CreateDevice g_origCreateDevice = nullptr;
+    D3DPRESENT_PARAMETERS pp = {};
+    pp.Windowed         = TRUE;
+    pp.SwapEffect       = D3DSWAPEFFECT_DISCARD;
+    pp.BackBufferFormat = D3DFMT_UNKNOWN;
+    pp.hDeviceWindow    = GetDesktopWindow();
 
-std::atomic<bool> g_deviceHooksInstalled{false};
-
-HRESULT WINAPI HookedCreateDevice(IDirect3D9* d3d, UINT adapter, D3DDEVTYPE deviceType, HWND focusWindow, DWORD behaviorFlags, D3DPRESENT_PARAMETERS* pp, IDirect3DDevice9** returnedDevice) {
-    HRESULT hr = g_origCreateDevice(d3d, adapter, deviceType, focusWindow, behaviorFlags, pp, returnedDevice);
-    if (SUCCEEDED(hr) && returnedDevice && *returnedDevice) {
-        if (!g_deviceHooksInstalled.exchange(true)) {
-            IDirect3DDevice9* dev = *returnedDevice;
-            void** vt = *reinterpret_cast<void***>(dev);
-            void* endSceneAddr = vt[42];
-            void* resetAddr = vt[16];
-
-            Logf("[l2voice] Interceptado CreateDevice do jogo! EndScene=%p Reset=%p\n", endSceneAddr, resetAddr);
-
-            MH_STATUS s1 = MH_CreateHook(endSceneAddr,
-                reinterpret_cast<void*>(&HookEndScene),
-                reinterpret_cast<void**>(&g_origEndScene));
-            MH_STATUS s2 = MH_CreateHook(resetAddr,
-                reinterpret_cast<void*>(&HookReset),
-                reinterpret_cast<void**>(&g_origReset));
-
-            if (s1 == MH_OK && s2 == MH_OK) {
-                MH_EnableHook(endSceneAddr);
-                MH_EnableHook(resetAddr);
-                Logf("[l2voice] Hooks de EndScene e Reset ativados com sucesso no dispositivo real!\n");
-            } else {
-                Logf("[l2voice] Falha ao criar hooks do dispositivo real: EndScene=%d Reset=%d\n", s1, s2);
-                g_deviceHooksInstalled.store(false);
-            }
-        }
+    IDirect3DDevice9* dev = nullptr;
+    HRESULT hr = d3d->CreateDevice(
+        D3DADAPTER_DEFAULT, D3DDEVTYPE_NULLREF, GetDesktopWindow(),
+        D3DCREATE_SOFTWARE_VERTEXPROCESSING, &pp, &dev);
+    if (FAILED(hr) || !dev) {
+        // Fallback to D3DDEVTYPE_HAL if NULLREF is not supported by the system drivers
+        hr = d3d->CreateDevice(
+            D3DADAPTER_DEFAULT, D3DDEVTYPE_HAL, GetDesktopWindow(),
+            D3DCREATE_SOFTWARE_VERTEXPROCESSING, &pp, &dev);
     }
-    return hr;
-}
-
-IDirect3D9* WINAPI HookedDirect3DCreate9(UINT SDKVersion) {
-    IDirect3D9* d3d = g_origDirect3DCreate9(SDKVersion);
-    if (d3d) {
-        void** vt = *reinterpret_cast<void***>(d3d);
-        void* createDeviceAddr = vt[16];
-
-        Logf("[l2voice] Interceptado Direct3DCreate9! Hooking CreateDevice em %p\n", createDeviceAddr);
-        
-        MH_STATUS s = MH_CreateHook(createDeviceAddr,
-            reinterpret_cast<void*>(&HookedCreateDevice),
-            reinterpret_cast<void**>(&g_origCreateDevice));
-        if (s == MH_OK || s == MH_ERROR_ALREADY_INITIALIZED) {
-            MH_EnableHook(createDeviceAddr);
-            Logf("[l2voice] Hook de IDirect3D9::CreateDevice ativado com sucesso!\n");
-        } else {
-            Logf("[l2voice] Falha ao criar hook de IDirect3D9::CreateDevice: %d\n", s);
-        }
-    }
-    return d3d;
+    if (FAILED(hr) || !dev) { d3d->Release(); return false; }
+    void** vt = *reinterpret_cast<void***>(dev);
+    resetOut    = vt[16];
+    endSceneOut = vt[42];
+    dev->Release();
+    d3d->Release();
+    return true;
 }
 
 }  // namespace
 
 bool InstallOverlay() {
     if (g_imguiCtx) return true;
+    void* endSceneAddr = nullptr;
+    void* resetAddr    = nullptr;
+    if (!GetDeviceVTableEntries(endSceneAddr, resetAddr)) {
+        Logf("[l2voice] overlay: GetDeviceVTableEntries failed\n");
+        return false;
+    }
+    Logf("[l2voice] overlay: EndScene=%p Reset=%p\n", endSceneAddr, resetAddr);
 
     MH_STATUS s = MH_Initialize();
     if (s != MH_OK && s != MH_ERROR_ALREADY_INITIALIZED) {
-        Logf("[l2voice] overlay: MH_Initialize falhou: %d\n", s);
+        Logf("[l2voice] overlay: MH_Initialize failed: %d\n", s);
         return false;
     }
-
-    HMODULE d3d9 = GetModuleHandleA("d3d9.dll");
-    if (!d3d9) {
-        d3d9 = LoadLibraryA("d3d9.dll");
-    }
-    if (!d3d9) {
-        Logf("[l2voice] d3d9.dll nao carregada\n");
-        return false;
-    }
-
-    void* d3dCreate9Addr = GetProcAddress(d3d9, "Direct3DCreate9");
-    if (!d3dCreate9Addr) {
-        Logf("[l2voice] Direct3DCreate9 nao encontrado na d3d9.dll\n");
-        return false;
-    }
-
-    MH_STATUS hookStatus = MH_CreateHook(d3dCreate9Addr,
-        reinterpret_cast<void*>(&HookedDirect3DCreate9),
-        reinterpret_cast<void**>(&g_origDirect3DCreate9));
-    
-    if (hookStatus == MH_OK || hookStatus == MH_ERROR_ALREADY_INITIALIZED) {
-        MH_EnableHook(d3dCreate9Addr);
-        Logf("[l2voice] Hooked Direct3DCreate9 successfully!\n");
-    } else {
-        Logf("[l2voice] Failed to hook Direct3DCreate9: %d\n", hookStatus);
-        return false;
-    }
-
+    // Also hook GetAsyncKeyState in user32 so the game's polling
+    // input loop (typical for L2: GetAsyncKeyState(VK_LBUTTON) every
+    // tick to detect clicks) reports "no click" while the panel has
+    // the mouse. Pure WndProc consume isn't enough — the kernel
+    // still tracks the physical button state, and GetAsyncKeyState
+    // reads from there, bypassing message processing.
     HMODULE user32 = GetModuleHandleA("user32.dll");
     void* gaksAddr = user32 ? GetProcAddress(user32, "GetAsyncKeyState") : nullptr;
 
+    if (MH_CreateHook(endSceneAddr,
+            reinterpret_cast<void*>(&HookEndScene),
+            reinterpret_cast<void**>(&g_origEndScene)) != MH_OK ||
+        MH_CreateHook(resetAddr,
+            reinterpret_cast<void*>(&HookReset),
+            reinterpret_cast<void**>(&g_origReset)) != MH_OK) {
+        Logf("[l2voice] overlay: D3D9 hook install failed\n");
+        return false;
+    }
     if (gaksAddr) {
         if (MH_CreateHook(gaksAddr,
                 reinterpret_cast<void*>(&HookGetAsyncKeyState),
