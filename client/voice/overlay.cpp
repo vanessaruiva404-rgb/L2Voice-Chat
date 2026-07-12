@@ -3321,90 +3321,107 @@ HRESULT WINAPI HookReset(IDirect3DDevice9* dev, D3DPRESENT_PARAMETERS* pp) {
     return hr;
 }
 
-bool GetDeviceVTableEntries(void*& endSceneOut, void*& resetOut) {
-    using PFN_Direct3DCreate9 = IDirect3D9*(WINAPI*)(UINT);
-    HMODULE d3d9 = LoadLibraryA("d3d9.dll");
-    if (!d3d9) return false;
-    auto pCreate = reinterpret_cast<PFN_Direct3DCreate9>(
-        GetProcAddress(d3d9, "Direct3DCreate9"));
-    if (!pCreate) return false;
-    IDirect3D9* d3d = pCreate(D3D_SDK_VERSION);
-    if (!d3d) return false;
+using PFN_Direct3DCreate9 = IDirect3D9*(WINAPI*)(UINT);
+PFN_Direct3DCreate9 g_origDirect3DCreate9 = nullptr;
 
-    // Create a temporary dummy window instead of using GetDesktopWindow()
-    // This prevents crashes in Intel UHD/integrated graphics drivers due to cross-process window focus.
-    HWND dummyWnd = CreateWindowA("BUTTON", "Dummy", WS_OVERLAPPEDWINDOW, 0, 0, 100, 100, NULL, NULL, NULL, NULL);
-    if (!dummyWnd) {
-        d3d->Release();
-        return false;
-    }
+using PFN_CreateDevice = HRESULT(WINAPI*)(IDirect3D9*, UINT, D3DDEVTYPE, HWND, DWORD, D3DPRESENT_PARAMETERS*, IDirect3DDevice9**);
+PFN_CreateDevice g_origCreateDevice = nullptr;
 
-    D3DPRESENT_PARAMETERS pp = {};
-    pp.Windowed         = TRUE;
-    pp.SwapEffect       = D3DSWAPEFFECT_DISCARD;
-    pp.BackBufferFormat = D3DFMT_UNKNOWN;
-    pp.hDeviceWindow    = dummyWnd;
+std::atomic<bool> g_deviceHooksInstalled{false};
 
-    IDirect3DDevice9* dev = nullptr;
-    HRESULT hr = d3d->CreateDevice(
-        D3DADAPTER_DEFAULT, D3DDEVTYPE_NULLREF, dummyWnd,
-        D3DCREATE_SOFTWARE_VERTEXPROCESSING, &pp, &dev);
-    if (FAILED(hr) || !dev) {
-        // Fallback to D3DDEVTYPE_HAL
-        hr = d3d->CreateDevice(
-            D3DADAPTER_DEFAULT, D3DDEVTYPE_HAL, dummyWnd,
-            D3DCREATE_SOFTWARE_VERTEXPROCESSING, &pp, &dev);
+HRESULT WINAPI HookedCreateDevice(IDirect3D9* d3d, UINT adapter, D3DDEVTYPE deviceType, HWND focusWindow, DWORD behaviorFlags, D3DPRESENT_PARAMETERS* pp, IDirect3DDevice9** returnedDevice) {
+    HRESULT hr = g_origCreateDevice(d3d, adapter, deviceType, focusWindow, behaviorFlags, pp, returnedDevice);
+    if (SUCCEEDED(hr) && returnedDevice && *returnedDevice) {
+        if (!g_deviceHooksInstalled.exchange(true)) {
+            IDirect3DDevice9* dev = *returnedDevice;
+            void** vt = *reinterpret_cast<void***>(dev);
+            void* endSceneAddr = vt[42];
+            void* resetAddr = vt[16];
+
+            Logf("[l2voice] Interceptado CreateDevice do jogo! EndScene=%p Reset=%p\n", endSceneAddr, resetAddr);
+
+            MH_STATUS s1 = MH_CreateHook(endSceneAddr,
+                reinterpret_cast<void*>(&HookEndScene),
+                reinterpret_cast<void**>(&g_origEndScene));
+            MH_STATUS s2 = MH_CreateHook(resetAddr,
+                reinterpret_cast<void*>(&HookReset),
+                reinterpret_cast<void**>(&g_origReset));
+
+            if (s1 == MH_OK && s2 == MH_OK) {
+                MH_EnableHook(endSceneAddr);
+                MH_EnableHook(resetAddr);
+                Logf("[l2voice] Hooks de EndScene e Reset ativados com sucesso no dispositivo real!\n");
+            } else {
+                Logf("[l2voice] Falha ao criar hooks do dispositivo real: EndScene=%d Reset=%d\n", s1, s2);
+                g_deviceHooksInstalled.store(false);
+            }
+        }
     }
-    
-    bool success = false;
-    if (SUCCEEDED(hr) && dev) {
-        void** vt = *reinterpret_cast<void***>(dev);
-        resetOut    = vt[16];
-        endSceneOut = vt[42];
-        dev->Release();
-        success = true;
+    return hr;
+}
+
+IDirect3D9* WINAPI HookedDirect3DCreate9(UINT SDKVersion) {
+    IDirect3D9* d3d = g_origDirect3DCreate9(SDKVersion);
+    if (d3d) {
+        void** vt = *reinterpret_cast<void***>(d3d);
+        void* createDeviceAddr = vt[16];
+
+        Logf("[l2voice] Interceptado Direct3DCreate9! Hooking CreateDevice em %p\n", createDeviceAddr);
+        
+        MH_STATUS s = MH_CreateHook(createDeviceAddr,
+            reinterpret_cast<void*>(&HookedCreateDevice),
+            reinterpret_cast<void**>(&g_origCreateDevice));
+        if (s == MH_OK || s == MH_ERROR_ALREADY_INITIALIZED) {
+            MH_EnableHook(createDeviceAddr);
+            Logf("[l2voice] Hook de IDirect3D9::CreateDevice ativado com sucesso!\n");
+        } else {
+            Logf("[l2voice] Falha ao criar hook de IDirect3D9::CreateDevice: %d\n", s);
+        }
     }
-    
-    DestroyWindow(dummyWnd);
-    d3d->Release();
-    return success;
+    return d3d;
 }
 
 }  // namespace
 
 bool InstallOverlay() {
     if (g_imguiCtx) return true;
-    void* endSceneAddr = nullptr;
-    void* resetAddr    = nullptr;
-    if (!GetDeviceVTableEntries(endSceneAddr, resetAddr)) {
-        Logf("[l2voice] overlay: GetDeviceVTableEntries failed\n");
-        return false;
-    }
-    Logf("[l2voice] overlay: EndScene=%p Reset=%p\n", endSceneAddr, resetAddr);
 
     MH_STATUS s = MH_Initialize();
     if (s != MH_OK && s != MH_ERROR_ALREADY_INITIALIZED) {
-        Logf("[l2voice] overlay: MH_Initialize failed: %d\n", s);
+        Logf("[l2voice] overlay: MH_Initialize falhou: %d\n", s);
         return false;
     }
-    // Also hook GetAsyncKeyState in user32 so the game's polling
-    // input loop (typical for L2: GetAsyncKeyState(VK_LBUTTON) every
-    // tick to detect clicks) reports "no click" while the panel has
-    // the mouse. Pure WndProc consume isn't enough — the kernel
-    // still tracks the physical button state, and GetAsyncKeyState
-    // reads from there, bypassing message processing.
+
+    HMODULE d3d9 = GetModuleHandleA("d3d9.dll");
+    if (!d3d9) {
+        d3d9 = LoadLibraryA("d3d9.dll");
+    }
+    if (!d3d9) {
+        Logf("[l2voice] d3d9.dll nao carregada\n");
+        return false;
+    }
+
+    void* d3dCreate9Addr = GetProcAddress(d3d9, "Direct3DCreate9");
+    if (!d3dCreate9Addr) {
+        Logf("[l2voice] Direct3DCreate9 nao encontrado na d3d9.dll\n");
+        return false;
+    }
+
+    MH_STATUS hookStatus = MH_CreateHook(d3dCreate9Addr,
+        reinterpret_cast<void*>(&HookedDirect3DCreate9),
+        reinterpret_cast<void**>(&g_origDirect3DCreate9));
+    
+    if (hookStatus == MH_OK || hookStatus == MH_ERROR_ALREADY_INITIALIZED) {
+        MH_EnableHook(d3dCreate9Addr);
+        Logf("[l2voice] Hooked Direct3DCreate9 successfully!\n");
+    } else {
+        Logf("[l2voice] Failed to hook Direct3DCreate9: %d\n", hookStatus);
+        return false;
+    }
+
     HMODULE user32 = GetModuleHandleA("user32.dll");
     void* gaksAddr = user32 ? GetProcAddress(user32, "GetAsyncKeyState") : nullptr;
 
-    if (MH_CreateHook(endSceneAddr,
-            reinterpret_cast<void*>(&HookEndScene),
-            reinterpret_cast<void**>(&g_origEndScene)) != MH_OK ||
-        MH_CreateHook(resetAddr,
-            reinterpret_cast<void*>(&HookReset),
-            reinterpret_cast<void**>(&g_origReset)) != MH_OK) {
-        Logf("[l2voice] overlay: D3D9 hook install failed\n");
-        return false;
-    }
     if (gaksAddr) {
         if (MH_CreateHook(gaksAddr,
                 reinterpret_cast<void*>(&HookGetAsyncKeyState),
