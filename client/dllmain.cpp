@@ -15,6 +15,7 @@
 // no per-frame work and does not need its own D3D9 hook.
 
 #include "voice/voice.h"
+#include "voice/overlay.h"
 
 #include <windows.h>
 #include <shlwapi.h>
@@ -50,6 +51,13 @@ void ResolveIniPath(wchar_t* out, size_t cap) {
 
 void InitWorker() {
     OutputDebugStringA("[l2voice] InitWorker started\n");
+
+    // Hook DirectX 9 immediately to catch the game's D3D device creation
+    if (!voice::InstallOverlay()) {
+        OutputDebugStringA("[l2voice] voice::InstallOverlay FAILED to install hooks\n");
+    } else {
+        OutputDebugStringA("[l2voice] voice::InstallOverlay hooks installed successfully!\n");
+    }
 
     // Wait until the main game viewport window is created and fully initialized.
     // This prevents audio subsystem and D3D9 initialization conflicts with Lineage II
